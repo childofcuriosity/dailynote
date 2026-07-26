@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/conversation.dart';
 import '../models/message.dart';
-import '../services/database.dart';
+import '../services/clients.dart';
+import '../services/supabase_service.dart';
 import '../services/ai_service.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
 import '../services/secrets.dart';
 
 // ============ 工具定义 ============
@@ -26,7 +30,7 @@ const _tools = [
       'parameters': {
         'type': 'object',
         'properties': {
-          'conversation_id': {'type': 'integer', 'description': '要载入的对话ID'},
+          'conversation_id': {'type': 'string', 'description': '要载入的对话ID'},
         },
         'required': ['conversation_id'],
       },
@@ -76,7 +80,7 @@ const _tools = [
       'parameters': {
         'type': 'object',
         'properties': {
-          'id': {'type': 'integer', 'description': '记忆ID（从 list_memories 获取）'},
+          'id': {'type': 'string', 'description': '记忆ID（从 list_memories 获取）'},
           'content': {'type': 'string', 'description': '修改后的内容'},
         },
         'required': ['id', 'content'],
@@ -91,7 +95,7 @@ const _tools = [
       'parameters': {
         'type': 'object',
         'properties': {
-          'id': {'type': 'integer', 'description': '记忆ID（从 list_memories 获取）'},
+          'id': {'type': 'string', 'description': '记忆ID（从 list_memories 获取）'},
         },
         'required': ['id'],
       },
@@ -118,18 +122,65 @@ const _systemPrompt = '''你是一个贴心的日记助手，用中文回复，�
 // ============ ChatPage ============
 
 class ChatPage extends StatefulWidget {
-  final int? conversationId;
+  final String? conversationId;
   const ChatPage({super.key, this.conversationId});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
 }
 
+/// 把文本里的 $...$ 和 $$...$$ 拆成 Text + Math 组件列表
+List<Widget> _buildContentWithLatex(String text, BuildContext context) {
+  final regex = RegExp(r'\$\$(.+?)\$\$|\$(.+?)\$');
+  final widgets = <Widget>[];
+  int start = 0;
+
+  for (final match in regex.allMatches(text)) {
+    // 公式前面的纯文本用 MarkdownBody 渲染
+    if (match.start > start) {
+      widgets.add(MarkdownBody(
+        data: text.substring(start, match.start),
+        styleSheet: MarkdownStyleSheet(
+          p: DefaultTextStyle.of(context).style,
+          code: TextStyle(backgroundColor: Colors.grey.shade300, fontSize: 13, fontFamily: 'monospace'),
+          codeblockDecoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(8)),
+        ),
+      ));
+    }
+    // 公式
+    final isBlock = match.group(0)!.startsWith(r'$$');
+    final tex = (isBlock ? match.group(1) : match.group(2)) ?? '';
+    final formula = isBlock
+        ? Center(child: Math.tex(tex, mathStyle: MathStyle.display, textStyle: const TextStyle(fontSize: 18)))
+        : Math.tex(tex, mathStyle: MathStyle.text, textStyle: const TextStyle(fontSize: 16));
+    // 选区可见的 LaTeX 原文 + 渲染后的公式
+    widgets.add(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(tex, style: const TextStyle(fontSize: 0)),
+      formula,
+    ]));
+    start = match.end;
+  }
+
+  // 最后一段纯文本
+  if (start < text.length) {
+    widgets.add(MarkdownBody(
+      data: text.substring(start),
+      styleSheet: MarkdownStyleSheet(
+        p: DefaultTextStyle.of(context).style,
+        code: TextStyle(backgroundColor: Colors.grey.shade300, fontSize: 13, fontFamily: 'monospace'),
+        codeblockDecoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(8)),
+      ),
+    ));
+  }
+
+  return widgets.isEmpty ? [const Text('')] : widgets;
+}
+
 class _ChatPageState extends State<ChatPage> {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
-  final _db = DatabaseService();
+  final _supa = SupaService(supaClient);
   final _ai = AiService(
     apiKey: Secrets.aiApiKey,
     baseUrl: Secrets.aiBaseUrl,
@@ -137,7 +188,7 @@ class _ChatPageState extends State<ChatPage> {
   );
   final List<Map<String, dynamic>> _messages = [];
   final Set<int> _expandedReasoning = {};
-  int? _conversationId;
+  String? _conversationId;
   String _convTitle = '新对话';
   String? _convSummary;
   String? _convNote;
@@ -161,8 +212,9 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _loadHistory() async {
-    final messages = await _db.getMessages(_conversationId!);
-    final conv = await _db.getConversation(_conversationId!);
+    final messages = await _supa.getMessages(_conversationId!);
+    final conv = await _supa.getConversation(_conversationId!);
+    if (!mounted) return;
     setState(() {
       _convTitle = conv?.title ?? '新对话';
       _convSummary = conv?.summary;
@@ -171,6 +223,7 @@ class _ChatPageState extends State<ChatPage> {
         messages.map((m) => {
               'role': m.role,
               'content': m.content,
+              'reasoning': m.reasoning,
               'time': m.createdAt.millisecondsSinceEpoch,
             }),
       );
@@ -197,17 +250,17 @@ class _ChatPageState extends State<ChatPage> {
         title: _convTitle,
         createdAt: DateTime.now(),
       );
-      _conversationId = await _db.insertConversation(conv);
+      _conversationId = await _supa.insertConversation(conv);
     }
 
-    await _db.insertMessage(Message(
+    await _supa.insertMessage(Message(
       conversationId: _conversationId,
       role: 'user',
       content: text,
       createdAt: DateTime.now(),
     ));
 
-    await _db.touchConversation(_conversationId!);
+    await _supa.touchConversation(_conversationId!);
 
     setState(() => _isLoading = true);
 
@@ -225,10 +278,11 @@ class _ChatPageState extends State<ChatPage> {
           'time': replyTime,
         });
       });
-      await _db.insertMessage(Message(
+      await _supa.insertMessage(Message(
         conversationId: _conversationId,
         role: 'assistant',
         content: reply,
+        reasoning: reasoning,
         createdAt: DateTime.now(),
       ));
     } catch (e) {
@@ -300,8 +354,9 @@ class _ChatPageState extends State<ChatPage> {
   Future<String> _executeTool(String name, Map<String, dynamic> args) async {
     switch (name) {
       case 'list_history':
-        final results = await _db.listAllConversations();
+        final results = await _supa.listAllConversations();
         if (results.isEmpty) return '还没有任何历史对话。';
+        final allTags = await _supa.getAllConversationTags();
         final lines = <String>[];
         for (final r in results) {
           final date =
@@ -310,17 +365,17 @@ class _ChatPageState extends State<ChatPage> {
               '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
           final note =
               r['user_note'] != null ? ' [备注: ${r['user_note']}]' : '';
-          final tags = await _db.getTagsForConversation(r['id'] as int);
+          final tags = allTags[r['id'] as String] ?? <String>[];
           final tagStr = tags.isNotEmpty ? ' [${tags.join(', ')}]' : '';
           lines.add('ID:${r['id']} | $dateStr | ${r['title']}$tagStr$note\n  ${r['summary'] ?? '无摘要'}');
         }
         return lines.join('\n\n');
 
       case 'load_conversation':
-        final msgs = await _db.getMessages(args['conversation_id'] as int);
+        final msgs = await _supa.getMessages(args['conversation_id'] as String);
         final conv =
-            await _db.getConversation(args['conversation_id'] as int);
-        final tags = conv != null ? await _db.getTagsForConversation(conv.id!) : <String>[];
+            await _supa.getConversation(args['conversation_id'] as String);
+        final tags = conv != null ? await _supa.getTagsForConversation(conv.uuid) : <String>[];
         final header = conv != null
             ? '对话: ${conv.title}${tags.isNotEmpty ? ' [${tags.join(', ')}]' : ''}\n'
             : '';
@@ -331,7 +386,7 @@ class _ChatPageState extends State<ChatPage> {
                 .join('\n');
 
       case 'list_memories':
-        final mems = await _db.getAllMemories();
+        final mems = await _supa.getAllMemories();
         // debugPrint('list_memories 返回 ${mems.length} 条');
         if (mems.isEmpty) return '还没有任何长期记忆。';
         return mems
@@ -342,15 +397,15 @@ class _ChatPageState extends State<ChatPage> {
         return await _searchWeb(args['query'] as String);
 
       case 'create_memory':
-        final cid = await _db.insertMemory(args['content'] as String);
+        final cid = await _supa.insertMemory(args['content'] as String);
         return '已创建记忆 ID:$cid';
 
       case 'update_memory':
-        await _db.updateMemory(args['id'] as int, args['content'] as String);
+        await _supa.updateMemory(args['id'] as String, args['content'] as String);
         return '已更新记忆 ID:${args['id']}';
 
       case 'delete_memory':
-        await _db.deleteMemory(args['id'] as int);
+        await _supa.deleteMemory(args['id'] as String);
         return '已删除记忆 ID:${args['id']}';
 
       default:
@@ -435,7 +490,7 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       // 创建新会话
-      final newConvId = await _db.insertConversation(Conversation(
+      final newConvId = await _supa.insertConversation(Conversation(
         title: newText.length > 20
             ? '${newText.substring(0, 20)}...'
             : newText,
@@ -445,7 +500,7 @@ class _ChatPageState extends State<ChatPage> {
 
       // 拷贝祖先消息
       if (ancestorCount > 0) {
-        await _db.copyMessagesBefore(
+        await _supa.copyMessagesBefore(
             _conversationId!, newConvId, ancestorCount);
       }
 
@@ -479,13 +534,13 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _applyTags(int convId, List<String> tagNames) async {
-    final tagIds = <int>[];
+  Future<void> _applyTags(String convId, List<String> tagNames) async {
+    final tagIds = <String>[];
     for (final name in tagNames) {
-      final tid = await _db.createTag(name);
+      final tid = await _supa.createTag(name);
       tagIds.add(tid);
     }
-    await _db.setConversationTags(convId, tagIds);
+    await _supa.setConversationTags(convId, tagIds);
   }
 
   // ============ 编辑元数据 ============
@@ -539,10 +594,10 @@ class _ChatPageState extends State<ChatPage> {
                     : noteCtrl.text.trim();
               });
               if (_conversationId != null) {
-                _db.getConversation(_conversationId!).then((c) {
+                _supa.getConversation(_conversationId!).then((c) {
                   if (c != null) {
-                    _db.updateConversation(Conversation(
-                      id: c.id,
+                    _supa.updateConversation(Conversation(
+                      uuid: c.uuid,
                       title: _convTitle,
                       summary: _convSummary,
                       userNote: _convNote,
@@ -609,7 +664,7 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       // 获取已有记忆传给 AI，避免重复输出
-      final existingMemories = (await _db.getAllMemories())
+      final existingMemories = (await _supa.getAllMemories())
           .map((m) => m['content'] as String)
           .toList();
 
@@ -618,7 +673,7 @@ class _ChatPageState extends State<ChatPage> {
         userInstruction:
             instruction != null && instruction!.isNotEmpty ? instruction : null,
         existingMemories: existingMemories,
-        tagLibrary: (await _db.getTags()).map((t) => t['name'] as String).toList(),
+        tagLibrary: (await _supa.getTags()).map((t) => t['name'] as String).toList(),
       );
 
       // 调试：打印 AI 返回的完整结果
@@ -629,7 +684,7 @@ class _ChatPageState extends State<ChatPage> {
 
       if (segments.length == 1) {
         final seg = segments[0] as Map<String, dynamic>;
-        final current = await _db.getConversation(_conversationId!);
+        final current = await _supa.getConversation(_conversationId!);
         if (current != null) {
           final newTitle = seg['title'] as String? ?? current.title;
           final newSummary = seg['summary'] as String? ?? current.summary;
@@ -637,8 +692,8 @@ class _ChatPageState extends State<ChatPage> {
             _convTitle = newTitle;
             _convSummary = newSummary;
           });
-          await _db.updateConversation(Conversation(
-            id: current.id,
+          await _supa.updateConversation(Conversation(
+            uuid: current.uuid,
             title: newTitle,
             summary: newSummary,
             userNote: current.userNote,
@@ -656,7 +711,7 @@ class _ChatPageState extends State<ChatPage> {
         }
         await _saveMemories(seg['memories'] as List<dynamic>?,
             _conversationId!);
-        await _db.markArchived(_conversationId!);
+        await _supa.markArchived(_conversationId!);
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -670,7 +725,7 @@ class _ChatPageState extends State<ChatPage> {
           final endIndex =
               seg['endIndex'] as int? ?? _messages.length - 1;
 
-          final newConvId = await _db.insertConversation(Conversation(
+          final newConvId = await _supa.insertConversation(Conversation(
             title: seg['title'] as String? ?? '未命名',
             summary: seg['summary'] as String?,
             forkedFrom: _conversationId,
@@ -691,7 +746,7 @@ class _ChatPageState extends State<ChatPage> {
             final m = _messages[i];
             if (m['content'] != null &&
                 (m['role'] == 'user' || m['role'] == 'assistant')) {
-              await _db.insertMessage(Message(
+              await _supa.insertMessage(Message(
                 conversationId: newConvId,
                 role: m['role'] as String,
                 content: m['content'] as String,
@@ -707,7 +762,7 @@ class _ChatPageState extends State<ChatPage> {
         }
 
         if (_conversationId != null) {
-          await _db.deleteConversation(_conversationId!);
+          await _supa.deleteConversation(_conversationId!);
         }
 
         if (mounted) {
@@ -729,12 +784,12 @@ class _ChatPageState extends State<ChatPage> {
     setState(() => _isLoading = false);
   }
 
-  Future<void> _saveMemories(List<dynamic>? memories, int convId) async {
+  Future<void> _saveMemories(List<dynamic>? memories, String? convId) async {
     // debugPrint('_saveMemories 收到: $memories');
     if (memories == null) return;
     for (final m in memories) {
       if (m is String && m.trim().isNotEmpty) {
-        final id = await _db.insertMemory(m.trim(), sourceConvId: convId);
+        final id = await _supa.insertMemory(m.trim(), sourceConvId: convId);
         // debugPrint('插入记忆 id=$id: ${m.trim()}');
       }
     }
@@ -941,16 +996,33 @@ class _ChatPageState extends State<ChatPage> {
                                   ),
                                 ),
                               ),
-                            SelectableText(msg['content']!),
+                            SelectionArea(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: _buildContentWithLatex(msg['content']!, context),
+                              ),
+                            ),
                             if (timeText.isNotEmpty)
                               Padding(
                                 padding: const EdgeInsets.only(top: 4),
-                                child: Text(
-                                  timeText,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey.shade600,
-                                  ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      timeText,
+                                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    GestureDetector(
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(text: msg['content']!));
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)),
+                                        );
+                                      },
+                                      child: Icon(Icons.copy, size: 13, color: Colors.grey.shade500),
+                                    ),
+                                  ],
                                 ),
                               ),
                           ],
@@ -975,15 +1047,23 @@ class _ChatPageState extends State<ChatPage> {
             child: Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    decoration: const InputDecoration(
-                      hintText: '输入内容...',
-                      border: OutlineInputBorder(),
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
+                        if (!_isLoading) _sendMessage();
+                      },
+                    },
+                    child: TextField(
+                      controller: _controller,
+                      focusNode: _focusNode,
+                      maxLines: null,
+                      minLines: 1,
+                      textInputAction: TextInputAction.newline,
+                      decoration: const InputDecoration(
+                        hintText: '输入内容... (Enter换行, Ctrl+Enter发送)',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
-                    onSubmitted:
-                        _isLoading ? null : (_) => _sendMessage(),
                   ),
                 ),
                 const SizedBox(width: 8),

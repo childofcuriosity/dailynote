@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services/database.dart';
+import '../services/clients.dart';
+import '../services/supabase_service.dart';
 
 class MemoriesPage extends StatefulWidget {
   const MemoriesPage({super.key});
@@ -9,7 +10,7 @@ class MemoriesPage extends StatefulWidget {
 }
 
 class _MemoriesPageState extends State<MemoriesPage> {
-  final _db = DatabaseService();
+  final _supa = SupaService(supaClient);
   List<Map<String, dynamic>> _memories = [];
   bool _loading = true;
 
@@ -20,19 +21,19 @@ class _MemoriesPageState extends State<MemoriesPage> {
   }
 
   Future<void> _load() async {
-    final list = await _db.getAllMemories();
+    final list = await _supa.getAllMemories();
     setState(() {
       _memories = list;
       _loading = false;
     });
   }
 
-  Future<void> _delete(int id) async {
-    await _db.deleteMemory(id);
+  Future<void> _delete(String id) async {
+    await _supa.deleteMemory(id);
     _load();
   }
 
-  Future<void> _edit(int id, String current) async {
+  Future<void> _edit(String id, String current) async {
     final controller = TextEditingController(text: current);
     final result = await showDialog<String>(
       context: context,
@@ -44,18 +45,15 @@ class _MemoriesPageState extends State<MemoriesPage> {
           maxLines: 3,
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('保存')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('保存')),
         ],
       ),
     );
     if (result != null && result.isNotEmpty && result != current) {
-      await _db.updateMemory(id, result);
+      await _supa.updateMemory(id, result);
       _load();
-      }
+    }
   }
 
   Future<void> _add() async {
@@ -66,30 +64,27 @@ class _MemoriesPageState extends State<MemoriesPage> {
         title: const Text('添加记忆'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            hintText: '如：用户喜欢鲁迅的作品',
-            border: OutlineInputBorder(),
-          ),
+          decoration: const InputDecoration(hintText: '如：用户喜欢鲁迅的作品', border: OutlineInputBorder()),
           maxLines: 3,
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('添加')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('添加')),
         ],
       ),
     );
     if (result != null && result.isNotEmpty) {
-      await _db.insertMemory(result);
+      await _supa.insertMemory(result);
       _load();
-      }
+    }
   }
 
-  String _formatTime(int ms) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+  String _formatTime(dynamic v) {
+    if (v is int) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(v);
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    }
+    return '';
   }
 
   @override
@@ -113,14 +108,14 @@ class _MemoriesPageState extends State<MemoriesPage> {
                         padding: const EdgeInsets.only(right: 16),
                         child: const Icon(Icons.delete, color: Colors.white),
                       ),
-                      onDismissed: (_) => _delete(m['id'] as int),
+                      onDismissed: (_) => _delete(m['id'] as String),
                       child: ListTile(
                         title: Text(m['content'] as String),
-                        subtitle: Text(_formatTime(m['created_at'] as int)),
-                        onTap: () => _edit(m['id'] as int, m['content'] as String),
+                        subtitle: Text(_formatTime(m['created_at'])),
+                        onTap: () => _edit(m['id'] as String, m['content'] as String),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 20),
-                          onPressed: () => _delete(m['id'] as int),
+                          onPressed: () => _delete(m['id'] as String),
                         ),
                       ),
                     );

@@ -1,76 +1,48 @@
 import 'package:uuid/uuid.dart';
 
 class Message {
-  final int? id;
-  final String uuid;
-  final int? conversationId;
-  final String? conversationUuid;
+  final String id;
+  final String? conversationId;
   final String role;
   final String content;
+  final String? reasoning;
   final DateTime createdAt;
-  final DateTime updatedAt;
 
   Message({
-    this.id,
-    String? uuid,
+    String? id,
     this.conversationId,
-    this.conversationUuid,
     required this.role,
     required this.content,
+    this.reasoning,
     required this.createdAt,
-    DateTime? updatedAt,
-  })  : uuid = uuid ?? const Uuid().v4(),
-        updatedAt = updatedAt ?? DateTime.now();
+  }) : id = id ?? const Uuid().v4();
 
-  factory Message.fromMap(Map<String, dynamic> map) {
+  factory Message.fromSupabase(Map<String, dynamic> map) {
     return Message(
-      id: map['id'] as int?,
-      uuid: (map['uuid'] as String?) ?? const Uuid().v4(),
-      conversationId: map['conversation_id'] as int?,
-      conversationUuid: map['conversation_uuid'] as String?,
+      id: map['id'] as String,
+      conversationId: map['conversation_id'] as String?,
       role: map['role'] as String,
       content: map['content'] as String,
-      createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
-      updatedAt: map['updated_at'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['updated_at'] as int)
-          : null,
+      reasoning: map['reasoning'] as String?,
+      createdAt: _parseTime(map['created_at']),
     );
   }
 
-  Map<String, dynamic> toMap() {
+  Map<String, dynamic> toSupabase() {
     return {
-      if (id != null) 'id': id,
-      'uuid': uuid,
+      'id': id,
       'conversation_id': conversationId,
-      'conversation_uuid': conversationUuid,
       'role': role,
       'content': content,
+      'reasoning': reasoning,
       'created_at': createdAt.millisecondsSinceEpoch,
-      'updated_at': updatedAt.millisecondsSinceEpoch,
+      'updated_at': DateTime.now().millisecondsSinceEpoch,
     };
   }
 
-  /// 转为 Supabase 同步用的 map
-  Map<String, dynamic> toSyncMap() {
-    return {
-      'id': uuid,
-      'conversation_id': conversationUuid,
-      'role': role,
-      'content': content,
-      'created_at': createdAt.millisecondsSinceEpoch,
-      'updated_at': updatedAt.millisecondsSinceEpoch,
-    };
-  }
-
-  factory Message.fromSyncMap(Map<String, dynamic> map) {
-    return Message(
-      uuid: map['id'] as String,
-      conversationUuid: map['conversation_id'] as String?,
-      role: map['role'] as String,
-      content: map['content'] as String,
-      createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
-      updatedAt:
-          DateTime.fromMillisecondsSinceEpoch(map['updated_at'] as int),
-    );
+  static DateTime _parseTime(dynamic v) {
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    if (v is String) return DateTime.fromMillisecondsSinceEpoch(int.tryParse(v) ?? 0);
+    return DateTime.now();
   }
 }
