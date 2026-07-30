@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/clients.dart';
-import '../services/supabase_service.dart';
+import '../services/api_service.dart';
 
 class MemoriesPage extends StatefulWidget {
   const MemoriesPage({super.key});
@@ -10,9 +9,22 @@ class MemoriesPage extends StatefulWidget {
 }
 
 class _MemoriesPageState extends State<MemoriesPage> {
-  final _supa = SupaService(supaClient);
+  final _api = ApiService();
   List<Map<String, dynamic>> _memories = [];
   bool _loading = true;
+
+  static const _typeLabels = {
+    'fact': '事实',
+    'feedback': '偏好',
+    'observation': '观察',
+    'self_correction': '自我纠正',
+  };
+  static const _typeColors = {
+    'fact': Colors.blue,
+    'feedback': Colors.orange,
+    'observation': Colors.purple,
+    'self_correction': Colors.red,
+  };
 
   @override
   void initState() {
@@ -21,7 +33,7 @@ class _MemoriesPageState extends State<MemoriesPage> {
   }
 
   Future<void> _load() async {
-    final list = await _supa.getAllMemories();
+    final list = await _api.getAllMemories();
     setState(() {
       _memories = list;
       _loading = false;
@@ -29,52 +41,165 @@ class _MemoriesPageState extends State<MemoriesPage> {
   }
 
   Future<void> _delete(String id) async {
-    await _supa.deleteMemory(id);
+    await _api.deleteMemory(id);
     _load();
   }
 
-  Future<void> _edit(String id, String current) async {
-    final controller = TextEditingController(text: current);
-    final result = await showDialog<String>(
+  Future<void> _edit(Map<String, dynamic> m) async {
+    final contentCtrl = TextEditingController(text: m['content'] as String? ?? '');
+    final nameCtrl = TextEditingController(text: m['name'] as String? ?? '');
+    final descCtrl = TextEditingController(text: m['description'] as String? ?? '');
+    var selectedType = (m['type'] as String?) ?? 'fact';
+
+    final result = await showDialog<Map<String, String>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑记忆'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-          maxLines: 3,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('编辑记忆'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 类型选择
+                const Text('类型', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  children: _typeLabels.entries.map((e) => ChoiceChip(
+                    label: Text(e.value, style: const TextStyle(fontSize: 12)),
+                    selected: selectedType == e.key,
+                    selectedColor: _typeColors[e.key]?.withValues(alpha: 0.3),
+                    onSelected: (_) => setDialogState(() => selectedType = e.key),
+                  )).toList(),
+                ),
+                const SizedBox(height: 12),
+                // Name
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '标识名', hintText: 'kebab-case，如 dislike-morning-msg',
+                    border: OutlineInputBorder(), isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Description
+                TextField(
+                  controller: descCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '一行摘要', hintText: '用于索引匹配',
+                    border: OutlineInputBorder(), isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Content
+                TextField(
+                  controller: contentCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '完整内容', border: OutlineInputBorder(),
+                  ),
+                  maxLines: 4,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(ctx, {
+              'content': contentCtrl.text.trim(),
+              'name': nameCtrl.text.trim(),
+              'description': descCtrl.text.trim(),
+              'type': selectedType,
+            }), child: const Text('保存')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('保存')),
-        ],
       ),
     );
-    if (result != null && result.isNotEmpty && result != current) {
-      await _supa.updateMemory(id, result);
+    if (result != null && result['content']!.isNotEmpty) {
+      await _api.updateMemory(
+        m['id'] as String,
+        result['content']!,
+        name: result['name']!.isEmpty ? null : result['name'],
+        description: result['description']!.isEmpty ? null : result['description'],
+        type: result['type'],
+      );
       _load();
     }
   }
 
   Future<void> _add() async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
+    final contentCtrl = TextEditingController();
+    final nameCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    var selectedType = 'fact';
+
+    final result = await showDialog<Map<String, String>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('添加记忆'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(hintText: '如：用户喜欢鲁迅的作品', border: OutlineInputBorder()),
-          maxLines: 3,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('添加记忆'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('类型', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  children: _typeLabels.entries.map((e) => ChoiceChip(
+                    label: Text(e.value, style: const TextStyle(fontSize: 12)),
+                    selected: selectedType == e.key,
+                    selectedColor: _typeColors[e.key]?.withValues(alpha: 0.3),
+                    onSelected: (_) => setDialogState(() => selectedType = e.key),
+                  )).toList(),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '标识名', hintText: 'kebab-case',
+                    border: OutlineInputBorder(), isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: descCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '一行摘要',
+                    border: OutlineInputBorder(), isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: contentCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '完整内容', border: OutlineInputBorder(),
+                  ),
+                  maxLines: 4,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(ctx, {
+              'content': contentCtrl.text.trim(),
+              'name': nameCtrl.text.trim(),
+              'description': descCtrl.text.trim(),
+              'type': selectedType,
+            }), child: const Text('添加')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('添加')),
-        ],
       ),
     );
-    if (result != null && result.isNotEmpty) {
-      await _supa.insertMemory(result);
+    if (result != null && result['content']!.isNotEmpty) {
+      await _api.insertMemory(
+        result['content']!,
+        name: result['name']!.isEmpty ? null : result['name'],
+        description: result['description']!.isEmpty ? null : result['description'],
+        type: result['type'],
+      );
       _load();
     }
   }
@@ -99,6 +224,11 @@ class _MemoriesPageState extends State<MemoriesPage> {
                   itemCount: _memories.length,
                   itemBuilder: (context, index) {
                     final m = _memories[index];
+                    final type = (m['type'] as String?) ?? 'fact';
+                    final name = m['name'] as String? ?? '';
+                    final desc = m['description'] as String? ?? '';
+                    final content = m['content'] as String? ?? '';
+
                     return Dismissible(
                       key: Key('mem-${m['id']}'),
                       direction: DismissDirection.endToStart,
@@ -110,13 +240,39 @@ class _MemoriesPageState extends State<MemoriesPage> {
                       ),
                       onDismissed: (_) => _delete(m['id'] as String),
                       child: ListTile(
-                        title: Text(m['content'] as String),
-                        subtitle: Text(_formatTime(m['created_at'])),
-                        onTap: () => _edit(m['id'] as String, m['content'] as String),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 20),
-                          onPressed: () => _delete(m['id'] as String),
+                        title: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: (_typeColors[type] ?? Colors.grey).withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                _typeLabels[type] ?? type,
+                                style: TextStyle(fontSize: 10, color: _typeColors[type]),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                desc.isNotEmpty ? desc : content,
+                                maxLines: 8,
+                              ),
+                            ),
+                          ],
                         ),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            [
+                              if (name.isNotEmpty) name,
+                              _formatTime(m['created_at']),
+                            ].join(' · '),
+                            style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                          ),
+                        ),
+                        onTap: () => _edit(m),
                       ),
                     );
                   },

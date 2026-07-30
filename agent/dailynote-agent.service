@@ -1,0 +1,17 @@
+[Unit]
+Description=DailyNote AI Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/agent
+EnvironmentFile=/root/agent/.env
+ExecStart=/usr/bin/python3 /root/agent/main.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/agent/logs/stdout.log
+StandardError=append:/root/agent/logs/stderr.log
+
+[Install]
+WantedBy=multi-user.target

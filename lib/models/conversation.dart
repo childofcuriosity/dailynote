@@ -6,8 +6,10 @@ class Conversation {
   final String? summary;
   final String? userNote;
   final String? forkedFrom;
+  final String source;
   final bool pinned;
   final bool hidden;
+  final bool archived;
   final DateTime createdAt;
   final DateTime lastActiveAt;
   final DateTime? lastArchivedAt;
@@ -19,6 +21,8 @@ class Conversation {
     this.summary,
     this.userNote,
     this.forkedFrom,
+    this.source = 'user',
+    this.archived = false,
     this.pinned = false,
     this.hidden = false,
     required this.createdAt,
@@ -32,6 +36,8 @@ class Conversation {
   bool get isDirty =>
       lastArchivedAt == null || lastActiveAt.isAfter(lastArchivedAt!);
 
+  bool get isAiGenerated => source == 'explorer' || source == 'agent';
+
   factory Conversation.fromSupabase(Map<String, dynamic> map) {
     return Conversation(
       uuid: map['id'] as String,
@@ -39,8 +45,10 @@ class Conversation {
       summary: map['summary'] as String?,
       userNote: map['user_note'] as String?,
       forkedFrom: map['forked_from'] as String?,
+      source: map['source'] as String? ?? 'user',
       pinned: map['pinned'] == true,
       hidden: map['hidden'] == true,
+      archived: map['archived'] == true,
       createdAt: _parseTime(map['created_at']),
       lastActiveAt: _parseTime(map['last_active_at']),
       lastArchivedAt: map['last_archived_at'] != null ? _parseTime(map['last_archived_at']) : null,

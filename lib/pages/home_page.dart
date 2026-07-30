@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../services/clients.dart';
-import '../services/supabase_service.dart';
-import '../services/ai_service.dart';
-import '../services/secrets.dart';
+import '../services/api_service.dart';
 import '../models/conversation.dart';
 import 'chat_page.dart';
 import 'memories_page.dart';
+import 'soul_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -22,15 +20,18 @@ class _ConvWithTags {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _supa = SupaService(supaClient);
-  final _ai = AiService(apiKey: Secrets.aiApiKey, baseUrl: Secrets.aiBaseUrl, model: Secrets.aiModel);
+  final _api = ApiService();
   List<_ConvWithTags> _allConversations = []; // 全量缓存
   Map<String, List<_ConvWithTags>> _grouped = {};
   List<Map<String, dynamic>> _tags = [];
   final Set<String> _selectedTags = {};
   bool _pinnedOnly = false;
   bool _showHidden = false;
+  bool _hideAi = true;
+  bool _hideArchived = true;
   bool _loading = true;
+  bool _selectionMode = false;
+  final Set<String> _selectedConvIds = {};
 
   @override
   void initState() {
@@ -41,19 +42,19 @@ class _HomePageState extends State<HomePage> {
   Future<void> _init() async {
     await _loadTags();
     await _loadConversations(fromRemote: true);
-    await _autoArchiveDirty();
+    // 自动归档已交给 VPS agent 后台处理
   }
 
   Future<void> _loadTags() async {
-    _tags = await _supa.getTags();
+    _tags = await _api.getTags();
   }
 
   /// [fromRemote] 为 true 时重新拉取 Supabase（进聊天页回来后），否则纯本地过滤
   Future<void> _loadConversations({bool fromRemote = false}) async {
     if (!mounted) return;
     if (_allConversations.isEmpty || fromRemote) {
-      final all = await _supa.getConversations();
-      final allTags = await _supa.getAllConversationTags();
+      final all = await _api.getConversations();
+      final allTags = await _api.getAllConversationTags();
       _allConversations = all.map((c) => _ConvWithTags(c, allTags[c.uuid] ?? <String>[])).toList();
       await _loadTags();
     }
@@ -61,6 +62,8 @@ class _HomePageState extends State<HomePage> {
     final filtered = _allConversations.where((ct) {
       if (ct.conv.hidden && !_showHidden) return false;
       if (_pinnedOnly && !ct.conv.pinned) return false;
+      if (_hideAi && ct.conv.isAiGenerated) return false;
+      if (_hideArchived && ct.conv.archived) return false;
       if (_selectedTags.isNotEmpty && !ct.tags.any((t) => _selectedTags.contains(t))) return false;
       return true;
     }).toList();
@@ -76,45 +79,9 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Future<void> _autoArchiveDirty() async {
-    final dirtyConvs = await _supa.getDirtyBeforeToday();
-    if (dirtyConvs.isEmpty) return;
-    for (final conv in dirtyConvs) {
-      try {
-        final msgs = await _supa.getMessages(conv.uuid);
-        final msgList = msgs.map((m) => {'role': m.role, 'content': m.content}).toList();
-        if (msgList.length < 2) continue;
-        final existingMemories = await _supa.getAllMemoryContents();
-        final result = await _ai.autoArchive(messages: msgList, existingSummary: conv.summary, existingMemories: existingMemories);
-        await _supa.updateConversation(Conversation(
-          uuid: conv.uuid, title: result['title'] as String? ?? conv.title,
-          summary: result['summary'] as String? ?? conv.summary,
-          userNote: conv.userNote, forkedFrom: conv.forkedFrom,
-          pinned: conv.pinned,
-          createdAt: conv.createdAt, lastActiveAt: conv.lastActiveAt,
-          lastArchivedAt: DateTime.now(),
-        ));
-        final tags = (result['tags'] as List<dynamic>?)?.map((t) => t.toString()).toList() ?? [];
-        await _supa.applyTags(conv.uuid, tags);
-        final memories = result['memories'] as List<dynamic>?;
-        if (memories != null) {
-          for (final m in memories) {
-            if (m is String && m.trim().isNotEmpty) {
-              await _supa.insertMemory(m.trim(), sourceConvId: conv.uuid);
-            }
-          }
-        }
-      } catch (_) {}
-    }
-    await _loadConversations(fromRemote: true);
-  }
-
   Future<void> _applyTags(String convId, List<String> tagNames) async {
-    final tagIds = <String>[];
-    for (final name in tagNames) {
-      tagIds.add(await _supa.createTag(name));
-    }
-    await _supa.setConversationTags(convId, tagIds);
+    // VPS setConversationTags 内部已做 get_or_create_tag，直接传名字即可
+    await _api.setConversationTags(convId, tagNames);
     await _loadTags();
   }
 
@@ -135,7 +102,7 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(width: 8),
                 IconButton(icon: const Icon(Icons.add_circle), onPressed: () async {
                   if (nameCtrl.text.trim().isNotEmpty) {
-                    await _supa.createTag(nameCtrl.text.trim());
+                    await _api.createTag(nameCtrl.text.trim());
                     nameCtrl.clear();
                     await _loadTags();
                     setDialogState(() {});
@@ -150,7 +117,7 @@ class _HomePageState extends State<HomePage> {
                   return ListTile(
                     title: Text(name),
                     trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 18), onPressed: () async {
-                      await _supa.deleteTag(id);
+                      await _api.deleteTag(id);
                       await _loadTags();
                       setDialogState(() {});
                     }),
@@ -202,19 +169,46 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final confirmed = await showDialog<bool>(
+                  context: this.context,
+                  builder: (c) => AlertDialog(
+                    title: const Text('确认删除'),
+                    content: Text('删除「${conv.title}」及其所有消息？\n此操作不可撤销。'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
+                      TextButton(
+                        onPressed: () => Navigator.pop(c, true),
+                        child: const Text('删除', style: TextStyle(color: Colors.red)),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await _api.deleteConversation(conv.uuid);
+                  _loadConversations(fromRemote: true);
+                }
+              },
+              child: const Text('删除', style: TextStyle(color: Colors.red)),
+            ),
             TextButton(onPressed: () async {
-              await _supa.updateConversation(Conversation(
-                uuid: conv.uuid,
-                title: titleCtrl.text.trim().isEmpty ? conv.title : titleCtrl.text.trim(),
-                summary: conv.summary,
-                userNote: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+              final newTitle = titleCtrl.text.trim().isEmpty ? conv.title : titleCtrl.text.trim();
+              final newNote = noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim();
+              Navigator.pop(ctx);
+              await _api.updateConversation(Conversation(
+                uuid: conv.uuid, title: newTitle,
+                summary: conv.summary, userNote: newNote,
                 forkedFrom: conv.forkedFrom, pinned: pinned, hidden: hidden,
                 createdAt: conv.createdAt, lastActiveAt: conv.lastActiveAt,
                 lastArchivedAt: conv.lastArchivedAt,
               ));
               await _applyTags(conv.uuid, selectedTags);
-              Navigator.pop(ctx);
               _loadConversations(fromRemote: true);
             }, child: const Text('保存')),
           ],
@@ -233,31 +227,41 @@ class _HomePageState extends State<HomePage> {
         child: Text(date, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.teal)),
       ));
       for (final ct in _grouped[date]!) {
+        final selected = _selectedConvIds.contains(ct.conv.uuid);
         widgets.add(ListTile(
+          leading: _selectionMode
+              ? Checkbox(value: selected, onChanged: (_) => _toggleSelection(ct.conv.uuid))
+              : null,
           title: Row(children: [
             if (ct.conv.pinned) const Icon(Icons.star, size: 16, color: Colors.amber),
             if (ct.conv.hidden) const Icon(Icons.visibility_off, size: 16, color: Colors.grey),
+            if (ct.conv.isAiGenerated) const Icon(Icons.smart_toy, size: 16, color: Colors.teal),
+            if (ct.conv.archived) const Icon(Icons.archive, size: 16, color: Colors.brown),
             const SizedBox(width: 4),
             Expanded(child: Text(ct.conv.title,
               style: TextStyle(color: ct.conv.hidden ? Colors.grey : null),
             )),
           ]),
           subtitle: Text(ct.conv.summary ?? ''),
-          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-            if (ct.tags.isNotEmpty)
-              ...ct.tags.take(3).map((t) => Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Chip(label: Text(t, style: const TextStyle(fontSize: 9)), materialTapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              )),
-            if (ct.conv.userNote != null && ct.conv.userNote!.isNotEmpty)
-              Tooltip(message: ct.conv.userNote!, child: Icon(Icons.push_pin, size: 16, color: Colors.orange.shade400)),
-            const Icon(Icons.chevron_right),
-          ]),
-          onTap: () async {
-            await Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(conversationId: ct.conv.uuid)));
-            _loadConversations(fromRemote: true);
-          },
-          onLongPress: () => _showEditDialog(ct),
+          trailing: _selectionMode
+              ? null
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (ct.tags.isNotEmpty)
+                    ...ct.tags.take(3).map((t) => Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Chip(label: Text(t, style: const TextStyle(fontSize: 9)), materialTapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                    )),
+                  if (ct.conv.userNote != null && ct.conv.userNote!.isNotEmpty)
+                    Tooltip(message: ct.conv.userNote!, child: Icon(Icons.push_pin, size: 16, color: Colors.orange.shade400)),
+                  const Icon(Icons.chevron_right),
+                ]),
+          onTap: _selectionMode
+              ? () => _toggleSelection(ct.conv.uuid)
+              : () async {
+                  await Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(conversationId: ct.conv.uuid)));
+                  _loadConversations(fromRemote: true);
+                },
+          onLongPress: _selectionMode ? null : () => _showEditDialog(ct),
         ));
         widgets.add(const Divider(indent: 16));
       }
@@ -267,12 +271,99 @@ class _HomePageState extends State<HomePage> {
 
   // ============ Build ============
 
+  // ============ 批量选择 ============
+
+  void _toggleSelection(String convId) {
+    setState(() {
+      if (_selectedConvIds.contains(convId)) {
+        _selectedConvIds.remove(convId);
+        if (_selectedConvIds.isEmpty) _selectionMode = false;
+      } else {
+        _selectedConvIds.add(convId);
+      }
+    });
+  }
+
+  void _enterSelectionMode(String convId) {
+    setState(() {
+      _selectionMode = true;
+      _selectedConvIds.add(convId);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedConvIds.clear();
+    });
+  }
+
+  Future<void> _batchDelete() async {
+    final ids = Set<String>.from(_selectedConvIds);
+    for (final id in ids) {
+      await _api.deleteConversation(id);
+    }
+    _exitSelectionMode();
+    _loadConversations(fromRemote: true);
+  }
+
+  Future<void> _batchPin() async {
+    final ids = Set<String>.from(_selectedConvIds);
+    for (final id in ids) {
+      final conv = _allConversations.firstWhere((c) => c.conv.uuid == id).conv;
+      await _api.updateConversation(Conversation(
+        uuid: id, title: conv.title, summary: conv.summary,
+        userNote: conv.userNote, forkedFrom: conv.forkedFrom,
+        pinned: true, hidden: conv.hidden,
+        createdAt: conv.createdAt, lastActiveAt: conv.lastActiveAt,
+        lastArchivedAt: conv.lastArchivedAt,
+      ));
+    }
+    _exitSelectionMode();
+    _loadConversations(fromRemote: true);
+  }
+
+  Future<void> _batchHide() async {
+    final ids = Set<String>.from(_selectedConvIds);
+    for (final id in ids) {
+      final conv = _allConversations.firstWhere((c) => c.conv.uuid == id).conv;
+      await _api.updateConversation(Conversation(
+        uuid: id, title: conv.title, summary: conv.summary,
+        userNote: conv.userNote, forkedFrom: conv.forkedFrom,
+        pinned: conv.pinned, hidden: true,
+        createdAt: conv.createdAt, lastActiveAt: conv.lastActiveAt,
+        lastArchivedAt: conv.lastArchivedAt,
+      ));
+    }
+    _exitSelectionMode();
+    _loadConversations(fromRemote: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('日记助手'),
-        actions: [
+        title: _selectionMode
+            ? Text('已选 ${_selectedConvIds.length} 项')
+            : const Text('日记助手'),
+        leading: _selectionMode
+            ? IconButton(icon: const Icon(Icons.close), onPressed: _exitSelectionMode)
+            : null,
+        actions: _selectionMode
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.select_all),
+                  tooltip: '全选',
+                  onPressed: () => setState(() {
+                    for (final list in _grouped.values) {
+                      for (final ct in list) {
+                        _selectedConvIds.add(ct.conv.uuid);
+                      }
+                    }
+                  }),
+                ),
+              ]
+            : [
           IconButton(
             icon: Icon(_pinnedOnly ? Icons.star : Icons.star_border),
             tooltip: _pinnedOnly ? '显示全部' : '只看精选',
@@ -289,11 +380,37 @@ class _HomePageState extends State<HomePage> {
               _loadConversations(fromRemote: false);
             },
           ),
+          IconButton(
+            icon: Icon(_hideAi ? Icons.travel_explore : Icons.travel_explore,
+                color: _hideAi ? null : Colors.orange),
+            tooltip: _hideAi ? '显示 AI 发现' : '隐藏 AI 发现',
+            onPressed: () {
+              setState(() => _hideAi = !_hideAi);
+              _loadConversations(fromRemote: false);
+            },
+          ),
+          IconButton(
+            icon: Icon(_hideArchived ? Icons.archive_outlined : Icons.archive,
+                color: _hideArchived ? null : Colors.brown),
+            tooltip: _hideArchived ? '显示已归档' : '隐藏已归档',
+            onPressed: () {
+              setState(() => _hideArchived = !_hideArchived);
+              _loadConversations(fromRemote: false);
+            },
+          ),
           IconButton(icon: const Icon(Icons.label_outline), tooltip: '管理标签', onPressed: _showTagManager),
           IconButton(icon: const Icon(Icons.psychology_outlined), tooltip: '记忆管理', onPressed: () async {
             await Navigator.push(context, MaterialPageRoute(builder: (_) => const MemoriesPage()));
             _loadConversations(fromRemote: true);
           }),
+          IconButton(icon: const Icon(Icons.auto_awesome, size: 20), tooltip: 'AI Soul', onPressed: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => const SoulPage()));
+          }),
+          IconButton(
+            icon: const Icon(Icons.checklist, size: 20),
+            tooltip: '批量选择',
+            onPressed: () => setState(() => _selectionMode = true),
+          ),
         ],
       ),
       body: Column(children: [
@@ -328,13 +445,36 @@ class _HomePageState extends State<HomePage> {
                 ? const Center(child: Text('还没有日记'))
                 : ListView(children: _buildTimeline())),
       ]),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await Navigator.push(context, MaterialPageRoute(builder: (_) => const ChatPage()));
-          _loadConversations();
-        },
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton: _selectionMode
+          ? null
+          : FloatingActionButton(
+              onPressed: () async {
+                await Navigator.push(context, MaterialPageRoute(builder: (_) => const ChatPage()));
+                _loadConversations();
+              },
+              child: const Icon(Icons.add),
+            ),
+      bottomNavigationBar: _selectionMode && _selectedConvIds.isNotEmpty
+          ? BottomAppBar(
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                IconButton(
+                  icon: const Icon(Icons.delete, color: Colors.red),
+                  tooltip: '删除',
+                  onPressed: _batchDelete,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.star, color: Colors.amber),
+                  tooltip: '收藏',
+                  onPressed: _batchPin,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.visibility_off),
+                  tooltip: '隐藏',
+                  onPressed: _batchHide,
+                ),
+              ]),
+            )
+          : null,
     );
   }
 }
