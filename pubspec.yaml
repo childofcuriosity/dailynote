@@ -45,7 +45,7 @@ dependencies:
   sherpa_onnx: ^1.13.4
   sherpa_onnx_android_arm64: ^1.13.4
   record: ^6.0.0
-  flutter_tts: ^4.2.2
+  audioplayers: ^5.2.1
   audio_session: ^0.1.21
   permission_handler: ^11.3.1
   path_provider: ^2.1.0
