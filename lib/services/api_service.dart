@@ -88,14 +88,18 @@ class ApiService {
   Future<Map<String, dynamic>> sendMessageSync({
     String? conversationId,
     required String content,
+    bool voiceMode = false,
   }) async {
+    final body = <String, dynamic>{
+      'conversation_id': conversationId ?? '',
+      'content': content,
+    };
+    if (voiceMode) body['voice'] = true;
+
     final resp = await http.post(
       Uri.parse('$_base/messages?wait=true'),
       headers: _headers,
-      body: jsonEncode({
-        'conversation_id': conversationId ?? '',
-        'content': content,
-      }),
+      body: jsonEncode(body),
     );
     _check(resp);
     return jsonDecode(resp.body);

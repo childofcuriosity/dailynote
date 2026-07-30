@@ -46,6 +46,7 @@ class Agent:
         self._lock = threading.Lock()
         self._exploring = False
         self._reply_events: dict[str, threading.Event] = {}  # conv_id → Event，API 同步等待用
+        self._voice_convs: set[str] = set()  # 语音模式的会话，处理后清理
         self._last_archive_time = 0.0
 
     # ===== 生命周期 =====
@@ -70,6 +71,10 @@ class Agent:
 
     def signal_new_message(self, conv_id: str):
         self._new_message_event.set()
+
+    def mark_voice(self, conv_id: str):
+        """标记会话为语音模式，处理时注入口语化风格指令"""
+        self._voice_convs.add(conv_id)
 
     def wait_for_reply(self, conv_id: str, timeout: float = 120) -> dict | None:
         """同步等待某会话的 AI 回复完成，返回最后一条消息"""
@@ -117,7 +122,13 @@ class Agent:
             return
         for conv_id in conv_ids:
             try:
-                self._process(conv_id, CHAT_TOOLS)
+                extra = None
+                if conv_id in self._voice_convs:
+                    self._voice_convs.discard(conv_id)
+                    extra = [{'role': 'system', 'content':
+                        '[语音模式] 用户通过语音输入。语音识别可能有误，结合上下文猜测真实意图。请用口语化、简洁的风格回复，'
+                        '像朋友闲聊一样。默认简短，不要长篇大论。除非被追问，不要展开。'}]
+                self._process(conv_id, CHAT_TOOLS, extra_messages=extra)
             except Exception:
                 logger.exception(f'回复会话 {conv_id} 失败')
 

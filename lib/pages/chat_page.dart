@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/conversation.dart';
 import '../services/api_service.dart';
+import '../services/voice/voice_controller.dart';
+import '../widgets/voice_mic_button.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
@@ -72,17 +74,24 @@ class _ChatPageState extends State<ChatPage> {
   String? _convNote;
   bool _isLoading = false;
 
+  late final VoiceController _voiceController;
+
   @override
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
+    _voiceController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    _voiceController = VoiceController();
+    _voiceController.onVoiceSend = _sendVoiceText;
+    // 模型懒加载：首次按麦克风时才初始化，打开会话不卡
+
     if (widget.conversationId != null) {
       _conversationId = widget.conversationId;
       _loadHistory();
@@ -114,7 +123,16 @@ class _ChatPageState extends State<ChatPage> {
     if (text.isEmpty) return;
     _controller.clear();
     _focusNode.requestFocus();
+    await _sendTextAsMessage(text);
+  }
 
+  /// 语音回调用的接口，返回 AI 回复文本供 TTS 朗读
+  Future<String> _sendVoiceText(String text) async {
+    return await _sendTextAsMessage(text, voiceMode: true);
+  }
+
+  /// 核心发送逻辑，文字和语音共用
+  Future<String> _sendTextAsMessage(String text, {bool voiceMode = false}) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _messages.add({'role': 'user', 'content': text, 'time': now});
@@ -125,9 +143,10 @@ class _ChatPageState extends State<ChatPage> {
       final result = await _api.sendMessageSync(
         conversationId: _conversationId,
         content: text,
+        voiceMode: voiceMode,
       );
 
-      if (!mounted) return;
+      if (!mounted) return '';
 
       final serverMessages = (result['messages'] as List?) ?? [];
       _conversationId = result['conversation_id'] as String?;
@@ -143,14 +162,19 @@ class _ChatPageState extends State<ChatPage> {
           });
         }
         _isLoading = false;
-        if (_conversationId == null || _conversationId!.isEmpty) {
-          // 新会话，用第一条用户消息做标题
-        }
       });
 
       _scrollToBottom();
+
+      // 返回 AI 回复文本（语音模式需要朗读）
+      final lastAssistant = serverMessages
+          .where((m) => m['role'] == 'assistant')
+          .toList();
+      return lastAssistant.isNotEmpty
+          ? (lastAssistant.last['content'] as String? ?? '')
+          : '';
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return '出错了';
       setState(() {
         _messages.add({
           'role': 'assistant',
@@ -159,6 +183,7 @@ class _ChatPageState extends State<ChatPage> {
         });
         _isLoading = false;
       });
+      return '出错了：$e';
     }
   }
 
@@ -537,35 +562,96 @@ class _ChatPageState extends State<ChatPage> {
             ),
             Padding(
               padding: const EdgeInsets.all(8),
-              child: Row(children: [
-                Expanded(
-                  child: CallbackShortcuts(
-                    bindings: {
-                      const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
-                        if (!_isLoading) _sendMessage();
-                      },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 语音状态提示
+                  ValueListenableBuilder<VoiceState>(
+                    valueListenable: _voiceController.state,
+                    builder: (context, state, _) {
+                      if (state == VoiceState.idle) return const SizedBox.shrink();
+                      if (state == VoiceState.loading) {
+                        return Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          margin: const EdgeInsets.only(bottom: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text('正在加载语音模型...',
+                            style: TextStyle(fontSize: 13, color: Colors.blue.shade700)),
+                        );
+                      }
+                      return ValueListenableBuilder<String>(
+                        valueListenable: _voiceController.partialText,
+                        builder: (context, partial, _) {
+                          return Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            margin: const EdgeInsets.only(bottom: 4),
+                            decoration: BoxDecoration(
+                              color: state == VoiceState.listening
+                                  ? Colors.red.shade50
+                                  : state == VoiceState.processing
+                                      ? Colors.orange.shade50
+                                      : Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              state == VoiceState.listening
+                                  ? (partial.isNotEmpty ? '正在听: $partial' : '正在听...')
+                                  : state == VoiceState.processing
+                                      ? 'AI 正在思考...'
+                                      : 'AI 正在回复...',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: state == VoiceState.listening
+                                    ? Colors.red.shade700
+                                    : state == VoiceState.processing
+                                        ? Colors.orange.shade700
+                                        : Colors.green.shade700,
+                              ),
+                            ),
+                          );
+                        },
+                      );
                     },
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: _focusNode,
-                      maxLines: 10,
-                      minLines: 1,
-                      textInputAction: TextInputAction.newline,
-                      decoration: const InputDecoration(
-                        hintText: '输入内容... (Enter换行, Ctrl+Enter发送)',
-                        border: OutlineInputBorder(),
+                  ),
+                  // 输入行
+                  Row(children: [
+                    // 麦克风按钮
+                    VoiceMicButton(controller: _voiceController),
+                    Expanded(
+                      child: CallbackShortcuts(
+                        bindings: {
+                          const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
+                            if (!_isLoading) _sendMessage();
+                          },
+                        },
+                        child: TextField(
+                          controller: _controller,
+                          focusNode: _focusNode,
+                          maxLines: 10,
+                          minLines: 1,
+                          textInputAction: TextInputAction.newline,
+                          decoration: const InputDecoration(
+                            hintText: '输入内容... (Enter换行, Ctrl+Enter发送)',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: _isLoading ? null : _sendMessage,
-                  icon: _isLoading
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.send),
-                ),
-              ]),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: _isLoading ? null : _sendMessage,
+                      icon: _isLoading
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.send),
+                    ),
+                  ]),
+                ],
+              ),
             ),
           ],
         ),

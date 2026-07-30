@@ -91,6 +91,7 @@ def api_send_message():
     body = request.get_json(silent=True) or {}
     conv_id = body.get('conversation_id', '')
     content = body.get('content', '').strip()
+    voice_mode = body.get('voice', False)
     wait = request.args.get('wait', '').lower() == 'true'
 
     if not content:
@@ -105,6 +106,10 @@ def api_send_message():
         return jsonify({'error': 'conversation not found'}), 404
 
     insert_message(conv_id, 'user', content)
+
+    # 语音模式：标记会话，agent 处理时通过 extra_messages 注入风格指令
+    if voice_mode and _agent:
+        _agent.mark_voice(conv_id)
 
     if wait and _agent:
         _agent.wait_for_reply(conv_id, timeout=180)
