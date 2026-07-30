@@ -20,7 +20,6 @@ from database import (
 )
 from ai_client import (
     send_request, build_messages,
-    auto_archive,
     TOOLS, CHAT_TOOLS, ARCHIVE_TOOLS, EXPLORE_TOOLS, SERPER_API_KEY,
 )
 from explorer import (

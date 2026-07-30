@@ -1,9 +1,7 @@
-"""DeepSeek API 客户端 — 对标 Flutter AiService
+"""DeepSeek API 客户端
 
-send_request()      → 对标 ai_service.dart sendRequest()
-archive_conversation() → 对标 archiveConversation()
-auto_archive()         → 对标 autoArchive()
-探索相关函数保持独立
+send_request()   → 调用 DeepSeek chat/completions
+build_messages() → 构建带 soul + 索引的完整消息列表
 """
 import json
 import logging
@@ -343,94 +341,6 @@ def build_messages(tools: list[dict], conversation: list[dict],
     messages.extend(conversation)
     return messages
 
-
-# ===== 归档 =====
-
-def archive_conversation(messages: list[dict], existing_memories: list[str] | None = None,
-                         tag_library: list[str] | None = None,
-                         user_instruction: str = '') -> dict:
-    """对标 Flutter AiService.archiveConversation()"""
-    instr = f'\n用户的归档要求：{user_instruction}' if user_instruction else ''
-    existing = ''
-    if existing_memories:
-        existing = '\n已有的长期记忆（不要输出重复的）：\n' + \
-            '\n'.join(f'{i+1}. {m}' for i, m in enumerate(existing_memories))
-    taglib = ''
-    if tag_library:
-        taglib = '\n现有标签：' + '、'.join(tag_library) + '。优先从现有标签中选，没有合适的可以返回新标签名。'
-
-    prompt = f'''你是一个日记归档助手。这是用户主动触发的归档，分析以下对话，返回 JSON。
-
-{instr}
-{taglib}
-{existing}
-
-按话题切换点切分对话，不同话题分成不同的段。2-5段为宜。
-
-返回格式（严格 JSON，不要其他文字）：
-{{
-  "segments": [
-    {{
-      "title": "段落标题（15字以内）",
-      "tags": ["标签1", "标签2"],
-      "summary": "一段话总结信息量内容，去掉寒暄和废话，保留事实、决定、进展、情绪要点",
-      "memories": ["可跨会话检索的原子事实1"],
-      "startIndex": 0,
-      "endIndex": 4
-    }}
-  ]
-}}
-
-规则：
-- tags 每段1-3个标签。优先选现有标签，没有合适的就创建新标签（返回新名字）
-- 内容确实没有合适标签时 tags 可以是空数组 []
-- 每条消息都要归属于某一段，不要遗漏，不要重叠
-- 如果整段对话只有一个话题，就返回一段
-- summary 只保留有信息价值的内容，不说"用户和助手聊了xx"这种废话
-- memories 每一条是独立原子事实'''
-
-    full = [{'role': 'system', 'content': prompt}] + messages
-    result = send_request(full, temperature=0.2)
-    raw = (result.get('content') or '').strip()
-    if raw.startswith('```'):
-        raw = raw.split('```')[1]
-        if raw.startswith('json'):
-            raw = raw[4:]
-    return json.loads(raw.strip())
-
-
-def auto_archive(messages: list[dict], existing_summary: str | None = None,
-                 existing_memories: list[str] | None = None) -> dict:
-    """对标 Flutter AiService.autoArchive()"""
-    existing_note = f'\n之前的摘要：{existing_summary}' if existing_summary else ''
-    memories_part = ''
-    if existing_memories:
-        memories_part = '\n已有的长期记忆（不要输出重复的，除非有更新）：\n' + \
-            '\n'.join(f'{i+1}. {m}' for i, m in enumerate(existing_memories))
-
-    prompt = f'''你是日记归档助手。这是一段自动归档，不需要用户干预。
-
-{existing_note}
-
-{memories_part}
-重要：这段对话视为一个整体话题，不要拆分。只返回一段。
-
-返回严格 JSON：
-{{
-  "title": "会话标题（15字以内）",
-  "tags": ["标签1"],
-  "summary": "一段话总结信息量内容，去掉寒暄和废话",
-  "memories": ["原子事实1", "事实2"]
-}}'''
-
-    full = [{'role': 'system', 'content': prompt}] + messages
-    result = send_request(full, temperature=0.2)
-    raw = (result.get('content') or '').strip()
-    if raw.startswith('```'):
-        raw = raw.split('```')[1]
-        if raw.startswith('json'):
-            raw = raw[4:]
-    return json.loads(raw.strip())
 
 
 
