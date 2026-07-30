@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+import '../services/utils.dart';
 
 class Conversation {
   final String uuid;
@@ -49,10 +50,10 @@ class Conversation {
       pinned: map['pinned'] == true,
       hidden: map['hidden'] == true,
       archived: map['archived'] == true,
-      createdAt: _parseTime(map['created_at']),
-      lastActiveAt: _parseTime(map['last_active_at']),
-      lastArchivedAt: map['last_archived_at'] != null ? _parseTime(map['last_archived_at']) : null,
-      updatedAt: _parseTime(map['updated_at']),
+      createdAt: parseTime(map['created_at']),
+      lastActiveAt: parseTime(map['last_active_at']),
+      lastArchivedAt: map['last_archived_at'] != null ? parseTime(map['last_archived_at']) : null,
+      updatedAt: parseTime(map['updated_at']),
     );
   }
 
@@ -73,9 +74,4 @@ class Conversation {
     };
   }
 
-  static DateTime _parseTime(dynamic v) {
-    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
-    if (v is String) return DateTime.fromMillisecondsSinceEpoch(int.tryParse(v) ?? 0);
-    return DateTime.now();
-  }
 }

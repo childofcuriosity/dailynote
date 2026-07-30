@@ -53,11 +53,6 @@ class ApiService {
     _check(resp);
   }
 
-  Future<List<Conversation>> getDirtyBeforeToday() async {
-    // VPS 后台自动归档，App 端不再需要此方法
-    return [];
-  }
-
   Future<int> getConversationsCount() async {
     return (await getConversations()).length;
   }
@@ -190,10 +185,6 @@ class ApiService {
     _check(resp);
   }
 
-  Future<void> touchConversation(String id) async {
-    // VPS agent 会自动更新 last_active_at
-  }
-
   Future<void> markArchived(String id) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await http.put(
@@ -232,14 +223,6 @@ class ApiService {
       result[item['id'] as String] = rawTags.cast<String>();
     }
     return result;
-  }
-
-  Future<List<String>> getTagsForConversation(String convId) async {
-    final conv = await getConversation(convId);
-    if (conv == null) return [];
-    // 从 API 返回的 tags 字段读（api.py 已经注入了）
-    // 暂时用 getConversationTags API
-    return [];
   }
 
   Future<void> setConversationTags(String convId, List<String> tagIds) async {

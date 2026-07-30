@@ -177,7 +177,7 @@ class _HomePageState extends State<HomePage> {
               onPressed: () async {
                 Navigator.pop(ctx);
                 final confirmed = await showDialog<bool>(
-                  context: this.context,
+                  context: context,
                   builder: (c) => AlertDialog(
                     title: const Text('确认删除'),
                     content: Text('删除「${conv.title}」及其所有消息？\n此操作不可撤销。'),
@@ -281,13 +281,6 @@ class _HomePageState extends State<HomePage> {
       } else {
         _selectedConvIds.add(convId);
       }
-    });
-  }
-
-  void _enterSelectionMode(String convId) {
-    setState(() {
-      _selectionMode = true;
-      _selectedConvIds.add(convId);
     });
   }
 

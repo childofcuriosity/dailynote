@@ -1,4 +1,4 @@
-# 运行
+# 客户端运行
 创建：
 flutter create .
 [Environment]::SetEnvironmentVariable("NO_PROXY", "localhost,127.0.0.1,*.local", "User")
@@ -14,19 +14,15 @@ flutter build windows
 flutter build apk
 ```
 
-配置：
-注册 DeepSeek + Supabase
-在 Supabase SQL Editor 跑supabase_setup.sql这个文件
-把 key 发给你，你填到 secrets.dart 打出 APK
 
-远程部署：
-agent\deploy.bat          
+# 远程部署服务器：
+cd agent 
+.\deploy.bat        
 
-本地git:
-git add .
+# 本地git:
+git add -A
 git commit -m ""
 
-结构：服务器主，app从
 # 功能
 手机和ai聊天的日记向app。
 

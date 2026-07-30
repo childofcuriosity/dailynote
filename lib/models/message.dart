@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+import '../services/utils.dart';
 
 class Message {
   final String id;
@@ -24,7 +25,7 @@ class Message {
       role: map['role'] as String,
       content: map['content'] as String,
       reasoning: map['reasoning'] as String?,
-      createdAt: _parseTime(map['created_at']),
+      createdAt: parseTime(map['created_at']),
     );
   }
 
@@ -38,11 +39,5 @@ class Message {
       'created_at': createdAt.millisecondsSinceEpoch,
       'updated_at': DateTime.now().millisecondsSinceEpoch,
     };
-  }
-
-  static DateTime _parseTime(dynamic v) {
-    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
-    if (v is String) return DateTime.fromMillisecondsSinceEpoch(int.tryParse(v) ?? 0);
-    return DateTime.now();
   }
 }
