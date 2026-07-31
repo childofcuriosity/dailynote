@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'stt_service.dart';
 import 'tts_service.dart';
@@ -25,6 +26,20 @@ class VoiceController {
   Future<String> Function(String text)? onVoiceSend;
 
   bool _cancelled = false;
+
+  static const _headsetChannel = MethodChannel('com.dailynote.voice/headset');
+
+  VoiceController() {
+    _headsetChannel.setMethodCallHandler((call) {
+      if (call.method == 'headsetButton') {
+        toggle();
+      }
+      return Future<dynamic>.value();
+    });
+    // 进聊天页抢占音频优先权 + 保持屏幕常亮，防止息屏时酷狗抢走按键
+    _headsetChannel.invokeMethod('refreshPriority');
+    _headsetChannel.invokeMethod('keepScreenOn');
+  }
 
   // ========== 按钮入口 ==========
 
@@ -79,12 +94,19 @@ class VoiceController {
         partialText.value = text;
       },
       onDone: (_) {},
+      onError: (error) {
+        debugPrint('VoiceController 录音错误: $error');
+        state.value = VoiceState.idle;
+        partialText.value = error;
+      },
     );
   }
 
   /// 停止收音 → 有文字就发送，没文字回 idle
   Future<void> _stopAndSend() async {
     final text = await _stt.stop();
+    // 录音结束刷新优先权，防止息屏时酷狗抢走下次按键
+    _headsetChannel.invokeMethod('refreshPriority');
     if (text.trim().isNotEmpty) {
       _onSpeechDone(text);
     } else {
@@ -123,6 +145,7 @@ class VoiceController {
   void dispose() {
     _stt.cancel();
     TtsService().stop();
+    _headsetChannel.invokeMethod('allowScreenOff');
     state.dispose();
     partialText.dispose();
   }
