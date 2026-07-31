@@ -127,7 +127,7 @@ class Agent:
                     self._voice_convs.discard(conv_id)
                     extra = [{'role': 'system', 'content':
                         '[语音模式] 用户通过语音输入。语音识别可能有误，结合上下文猜测真实意图。请用口语化、简洁的风格回复，'
-                        '像朋友闲聊一样。默认简短，不要长篇大论。除非被追问，不要展开。'}]
+                        '像朋友闲聊一样，简短，不要长篇大论。'}]
                 self._process(conv_id, CHAT_TOOLS, extra_messages=extra)
             except Exception:
                 logger.exception(f'回复会话 {conv_id} 失败')
@@ -156,7 +156,7 @@ class Agent:
 
         # 对标 Flutter _ai.buildMessages(systemPrompt, dateNote, conversation)
         today = datetime.now()
-        date_note = f'今天是 {today.year}年{today.month}月{today.day}日'
+        date_note = f'现在是 {today.year}年{today.month}月{today.day}日 {today.hour:02d}:{today.minute:02d}'
 
         # 构建记忆索引（name + description + type）
         mems = list_memories()

@@ -307,7 +307,7 @@ def api_test_tools():
     query = body.get('query', '查一下我的所有长期记忆')
 
     today = datetime.now()
-    date_note = f'今天是 {today.year}年{today.month}月{today.day}日'
+    date_note = f'现在是 {today.year}年{today.month}月{today.day}日 {today.hour:02d}:{today.minute:02d}'
     messages = build_messages(TOOLS, [
         {'role': 'user', 'content': query}
     ], date_note=date_note)
