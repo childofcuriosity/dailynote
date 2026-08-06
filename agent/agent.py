@@ -254,7 +254,7 @@ class Agent:
 
         all_reasoning = list(_thought_chain)
         if reasoning:
-            all_reasoning.append(f'[思考] {reasoning[:500]}')
+            all_reasoning.append(f'[思考] {reasoning}')
 
         if tools is not ARCHIVE_TOOLS:
             if reply or all_reasoning:
