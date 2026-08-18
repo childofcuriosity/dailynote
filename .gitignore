@@ -46,3 +46,11 @@ app.*.map.json
 
 # 隐私配置（API Key 等）
 lib/services/secrets.dart
+agent/.env
+
+# Python
+__pycache__/
+*.pyc
+
+# 模型文件体积大，用 download_model.ps1 下载
+assets/models/

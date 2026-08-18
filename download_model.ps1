@@ -1,7 +1,7 @@
 # 下载 sherpa-onnx 语音模型：Silero VAD + SenseVoice（中英日韩粤）
 # SenseVoice int8 ~200MB | silero_vad ~2MB
 
-$dest = "e:\copyofxhy\after2024\2026\dailynote\assets\models"
+$dest = Join-Path $PSScriptRoot "assets\models"
 
 Write-Host "Cleaning old model files..."
 Remove-Item -Path "$dest\*.onnx" -Force -ErrorAction SilentlyContinue

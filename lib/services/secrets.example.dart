@@ -6,6 +6,12 @@ class Secrets {
   static const aiBaseUrl = 'https://api.deepseek.com/v1'; // 换成任何 OpenAI 兼容的 API 地址
   static const aiModel = 'deepseek-v4-pro';               // deepseek-chat / gpt-4o / moonshot-v1 等
 
+  // ===== VPS Agent 服务地址（手机连服务器时填公网 IP，留空则用 localhost）=====
+  static const vpsBaseUrl = '';  // 如 'http://1.2.3.4:8080'
+
+  // ===== Azure 语音（TTS，可选）=====
+  static const azureSpeechKey = '';  // 如 '9zRx...'
+
   // ===== Supabase 云同步（可选，留空则不启用）=====
   static const supabaseUrl = '';  // 如 'https://xxx.supabase.co'
   static const supabaseAnonKey = '';
