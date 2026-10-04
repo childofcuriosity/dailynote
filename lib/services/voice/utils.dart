@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-/// 从 assets 拷贝文件到 app 支持目录，返回目标路径
+/// Copy file from assets to app support directory, return destination path
 Future<String> copyAssetFile(String src, [String? dst]) async {
   final directory = await getApplicationSupportDirectory();
   final target = p.join(directory.path, dst ?? p.basename(src));
@@ -21,7 +21,7 @@ Future<String> copyAssetFile(String src, [String? dst]) async {
   return target;
 }
 
-/// PCM 16-bit 字节 → 归一化 Float32 数组 [-1.0, 1.0]
+/// PCM 16-bit bytes → normalized Float32 array [-1.0, 1.0]
 Float32List convertBytesToFloat32(Uint8List bytes, [Endian endian = Endian.little]) {
   final values = Float32List(bytes.length ~/ 2);
   final data = ByteData.view(bytes.buffer);

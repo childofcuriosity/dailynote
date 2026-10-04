@@ -160,10 +160,10 @@ void main(List<String> args) {
   }
   sherpa.initBindings(dllDirectory);
 
-  stderr.writeln('正在读取音频...');
+  stderr.writeln('Reading audio...');
   final wave = sherpa.readWave(wavPath);
   if (wave.samples.isEmpty || wave.sampleRate != 16000) {
-    throw StateError('需要非空的 16 kHz WAV，实际为 ${wave.sampleRate} Hz：$wavPath');
+    throw StateError('Expected a nonempty 16 kHz WAV; received ${wave.sampleRate} Hz: $wavPath');
   }
 
   final vad = sherpa.VoiceActivityDetector(
@@ -182,7 +182,7 @@ void main(List<String> args) {
     bufferSizeInSeconds: 30,
   );
 
-  stderr.writeln('正在加载 SenseVoice 模型...');
+  stderr.writeln('Loading the SenseVoice model...');
   final recognizer = sherpa.OfflineRecognizer(
     sherpa.OfflineRecognizerConfig(
       model: sherpa.OfflineModelConfig(
@@ -239,19 +239,19 @@ void main(List<String> args) {
     drainSegments();
 
     if (segments.isEmpty) {
-      throw StateError('没有检测到可识别的语音。');
+      throw StateError('No recognizable speech detected.');
     }
 
     File(srtPath).writeAsStringSync(buildSrt(segments));
     File(txtPath).writeAsStringSync(
       '${segments.map((segment) => segment.text).join('\n')}\n',
     );
-    stderr.writeln('识别完成：${segments.length} 个语音段。');
+    stderr.writeln('Transcription complete: ${segments.length} speech segments.');
   } finally {
     recognizer.free();
     vad.free();
     if (nativeLibraries.isEmpty) {
-      stderr.writeln('警告：没有预加载 ONNX Runtime 依赖。');
+      stderr.writeln('Warning: ONNX Runtime dependencies were not preloaded.');
     }
   }
 }

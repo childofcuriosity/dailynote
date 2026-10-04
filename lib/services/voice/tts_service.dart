@@ -4,9 +4,9 @@ import 'package:http/http.dart' as http;
 
 import '../secrets.dart';
 
-/// Azure TTS 语音合成，Xiaochen（晓辰）少女音
-/// 单例：全局共用一个播放器
-/// Key 在 secrets.dart 中配置（azureSpeechKey），不硬编码
+/// Azure TTS speech synthesis, Xiaochen (Xiaochen) young female voice
+/// Singleton: one shared player globally
+/// Key is configured in secrets.dart (azureSpeechKey), not hardcoded
 class TtsService {
   static final TtsService _instance = TtsService._();
   factory TtsService() => _instance;
@@ -17,11 +17,11 @@ class TtsService {
 
   final AudioPlayer _player = AudioPlayer();
 
-  /// 念出文本（自动清洗 markdown）
+  /// Speak text aloud (automatically cleans markdown)
   Future<void> speak(String text) async {
     final key = Secrets.azureSpeechKey;
     if (key.isEmpty) {
-      debugPrint('Azure TTS: azureSpeechKey 未配置，跳过朗读');
+      debugPrint('Azure TTS: azureSpeechKey is not configured; skipping speech');
       return;
     }
     final cleaned = _stripMarkdown(text);
@@ -50,20 +50,20 @@ class TtsService {
     }
   }
 
-  /// 立刻停止朗读
+  /// Stop speaking immediately
   Future<void> stop() async {
     await _player.stop();
   }
 
-  /// 把 AI 回复里的 markdown/代码块/公式 清洗成纯口语文本
+  /// Clean markdown/code blocks/formulas from AI replies into plain spoken text
   String _stripMarkdown(String text) {
     String t = text;
 
-    t = t.replaceAll(RegExp(r'```[\s\S]*?```'), '，代码省略，');
+    t = t.replaceAll(RegExp(r'```[\s\S]*?```'), ', code omitted, ');
     t = t.replaceAll(RegExp(r'`([^`]+)`'), r'\1');
     t = t.replaceAll(RegExp(r'\[([^\]]+)\]\([^)]+\)'), r'\1');
-    t = t.replaceAll(RegExp(r'\$\$[\s\S]*?\$\$'), '，公式省略，');
-    t = t.replaceAll(RegExp(r'\$[^$]+\$'), '，公式省略，');
+    t = t.replaceAll(RegExp(r'\$\$[\s\S]*?\$\$'), ', formula omitted, ');
+    t = t.replaceAll(RegExp(r'\$[^$]+\$'), ', formula omitted, ');
     t = t.replaceAll(RegExp(r'\*{1,3}'), '');
     t = t.replaceAll(RegExp(r'_{1,3}'), '');
     t = t.replaceAll(RegExp(r'~{1,2}'), '');

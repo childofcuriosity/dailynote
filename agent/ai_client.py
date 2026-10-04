@@ -1,8 +1,5 @@
-"""DeepSeek API 客户端
-
-send_request()   → 调用 DeepSeek chat/completions
-build_messages() → 构建带 soul + 索引的完整消息列表
-"""
+"""DeepSeek chat-completions client and account-scoped prompt builder."""
+from i18n import tr, localized_tools
 import json
 import logging
 import os
@@ -11,34 +8,35 @@ from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 
 logger = logging.getLogger(__name__)
 
-# ===== 与 Flutter chat_page.dart 完全一致 =====
+# ===== Identical to Flutter chat_page.dart =====
 
-SYSTEM_PROMPT_BASE = '''上面的部分是你的行为准则，由 xhy 编写，你只能读取不能修改。
+SYSTEM_PROMPT_BASE = """The section above contains behavior guidelines written by the account owner. You can read them but cannot modify them.
 
-## 记忆类型
+## Memory types
 
-- fact / observation: 参考即可，了解用户
-- feedback / self_correction: 这是你的行为准则，必须遵守。它们是你从相处中学到的——怎样做更好、哪里需要改
+- fact / observation: background information about the user.
+- feedback / self_correction: learned behavior guidelines about what works better and what needs improvement. Follow these when responding.
 
-## 检索策略
+## Retrieval strategy
 
-你的 system prompt 末尾已经注入了 [历史对话索引] 和 [记忆索引]。
-- 摘要够用时不要调 load_conversation / load_memory，节省上下文
-- 不相关的对话/记忆忽略掉，不要引用
-- 发现记忆中有旧信息、错误、重复时，主动用 update_memory 和 delete_memory 清理'''
+The conversation index and memory index are appended to this system prompt.
+- Use summaries first; call load_conversation or load_memory only when details are needed.
+- Ignore unrelated conversations and memories.
+- Use update_memory and delete_memory to correct outdated, incorrect, or duplicate memories."""
 
 
 def build_system_prompt(tools: list[dict]) -> str:
-    """根据工具列表动态生成完整 system prompt"""
-    lines = [SYSTEM_PROMPT_BASE, '', '## 工具', '', '你可以使用以下工具：']
-    for t in tools:
+    """Build a system prompt for the available tools."""
+    lines = [tr(SYSTEM_PROMPT_BASE), '', tr('## Tools'), '', tr('You can use the following tools:')]
+    lines.append(tr('Use English for all replies, reasoning, discoveries, titles, summaries, and memory content.'))
+    for t in localized_tools(tools):
         fn = t['function']
         name = fn['name']
         desc = fn['description']
         if name.startswith('create_') or name.startswith('update_') or name.startswith('delete_'):
             continue
         lines.append(f'- {name}: {desc}')
-    lines.append('- create_memory / update_memory / delete_memory: 管理记忆库')
+    lines.append(tr('- create_memory / update_memory / delete_memory: manage long-term memories'))
     return '\n'.join(lines)
 
 TOOLS = [
@@ -46,11 +44,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'load_conversation',
-            'description': '载入指定对话的完整消息。仅当摘要不够、需要查看细节时调用。',
+            'description': 'Load the full conversation only when its summary is insufficient.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'conversation_id': {'type': 'string', 'description': '要载入的对话ID'},
+                    'conversation_id': {'type': 'string', 'description': 'Conversation ID to load'},
                 },
                 'required': ['conversation_id'],
             },
@@ -60,11 +58,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'load_memory',
-            'description': '载入指定记忆的完整内容。仅在 list_memories 的索引摘要不够时调用。',
+            'description': 'Load a full memory only when its index description is insufficient.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'id': {'type': 'string', 'description': '记忆ID（从 list_memories 获取）'},
+                    'id': {'type': 'string', 'description': 'Memory ID from the memory index'},
                 },
                 'required': ['id'],
             },
@@ -74,11 +72,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'search_web',
-            'description': '搜索互联网获取最新信息。',
+            'description': 'Search the web for current information.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string', 'description': '搜索词'},
+                    'query': {'type': 'string', 'description': 'Search query'},
                 },
                 'required': ['query'],
             },
@@ -88,11 +86,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'search_arxiv',
-            'description': '搜索 arxiv 学术论文。适合查最新研究、技术论文。',
+            'description': 'Search arXiv for research and technical papers.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string', 'description': '搜索词'},
+                    'query': {'type': 'string', 'description': 'Search query'},
                 },
                 'required': ['query'],
             },
@@ -102,11 +100,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'search_hackernews',
-            'description': '搜索 HackerNews 技术新闻和讨论。适合查技术圈热门话题。不传搜索词则返回热榜。',
+            'description': 'Search Hacker News for technology news and discussions. Omit the query for top stories.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string', 'description': '搜索词。不传则返回 HackerNews 热榜'},
+                    'query': {'type': 'string', 'description': 'Search query; omit for top Hacker News stories'},
                 },
                 'required': [],
             },
@@ -116,11 +114,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'search_github',
-            'description': '搜索 GitHub 热门仓库。适合发现新开源项目。',
+            'description': 'Search GitHub for popular repositories and new open-source projects.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string', 'description': '搜索词，如语言名或关键词。不传则返回全站热门'},
+                    'query': {'type': 'string', 'description': 'Search query, such as a language or keyword; omit for popular repositories'},
                 },
                 'required': [],
             },
@@ -130,11 +128,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'fetch_url',
-            'description': '抓取指定网页的完整正文内容。搜索结果只有摘要不够时，用这个深入阅读原文。',
+            'description': 'Fetch the body of a web page when search snippets are insufficient.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'url': {'type': 'string', 'description': '要抓取的网页 URL'},
+                    'url': {'type': 'string', 'description': 'URL to fetch'},
                 },
                 'required': ['url'],
             },
@@ -144,14 +142,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'fetch_rendered',
-            'description': '用无头浏览器渲染动态网页后抓取正文。'
-                          '当 fetch_url 的结果不理想——只有导航/页面骨架、正文缺失、'
-                          '或出现"加载中"之类的占位文字时，用这个工具再试一次。'
-                          '较慢（约 5-10 秒），只在 fetch_url 不满意时使用，不要滥用。',
+            'description': 'Render a dynamic page in a headless browser and extract its body. Use only when fetch_url returns a page shell, missing text, or loading placeholders. This is slower (about 5-10 seconds).',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'url': {'type': 'string', 'description': '要渲染抓取的网页 URL'},
+                    'url': {'type': 'string', 'description': 'URL to render and fetch'},
                 },
                 'required': ['url'],
             },
@@ -161,13 +156,13 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'create_memory',
-            'description': '创建一条新的长期记忆。name 用 kebab-case 做唯一标识（如 dislike-structured-summary）。description 是一行索引摘要。完整的记忆内容放在 content。type 可选 fact/feedback/observation/self_correction。',
+            'description': 'Create a long-term memory. Use a unique kebab-case name, a one-line retrieval description, and full content. Types: fact, feedback, observation, self_correction.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'name': {'type': 'string', 'description': 'kebab-case 唯一标识，如 into-philosophy'},
-                    'description': {'type': 'string', 'description': '一行索引摘要，用于召回匹配'},
-                    'content': {'type': 'string', 'description': '记忆全文'},
+                    'name': {'type': 'string', 'description': 'Unique kebab-case identifier, e.g. into-philosophy'},
+                    'description': {'type': 'string', 'description': 'One-line description for retrieval'},
+                    'content': {'type': 'string', 'description': 'Full memory content'},
                     'type': {'type': 'string', 'description': 'fact/feedback/observation/self_correction'},
                 },
                 'required': ['name', 'description', 'content'],
@@ -178,15 +173,15 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'update_memory',
-            'description': '修改一条已有的长期记忆。可以只改部分字段。',
+            'description': 'Update an existing memory; partial updates are supported.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'id': {'type': 'string', 'description': '记忆ID（从 list_memories 获取）'},
-                    'name': {'type': 'string', 'description': '新的唯一标识（可选）'},
-                    'description': {'type': 'string', 'description': '新的一行摘要（可选）'},
-                    'content': {'type': 'string', 'description': '新的完整内容（可选）'},
-                    'type': {'type': 'string', 'description': '新类型（可选）'},
+                    'id': {'type': 'string', 'description': 'Memory ID from the memory index'},
+                    'name': {'type': 'string', 'description': 'New unique identifier (optional)'},
+                    'description': {'type': 'string', 'description': 'New one-line description (optional)'},
+                    'content': {'type': 'string', 'description': 'New full content (optional)'},
+                    'type': {'type': 'string', 'description': 'New type (optional)'},
                 },
                 'required': ['id'],
             },
@@ -196,11 +191,11 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'delete_memory',
-            'description': '删除一条长期记忆。',
+            'description': 'Delete a long-term memory.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'id': {'type': 'string', 'description': '记忆ID（从 list_memories 获取）'},
+                    'id': {'type': 'string', 'description': 'Memory ID from the memory index'},
                 },
                 'required': ['id'],
             },
@@ -210,12 +205,12 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'update_conversation',
-            'description': '更新当前对话的标题和摘要。',
+            'description': 'Update the current conversation title and summary.',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'title': {'type': 'string', 'description': '新标题'},
-                    'summary': {'type': 'string', 'description': '新摘要'},
+                    'title': {'type': 'string', 'description': 'New title'},
+                    'summary': {'type': 'string', 'description': 'New summary'},
                 },
                 'required': [],
             },
@@ -223,9 +218,9 @@ TOOLS = [
     },
 ]
 
-# ===== 场景工具子集 =====
+# ===== Scenario tool subset =====
 
-CHAT_TOOLS = TOOLS  # 聊天：全量工具
+CHAT_TOOLS = TOOLS  # Chat: Full toolset
 
 ARCHIVE_TOOLS = [
     t for t in TOOLS
@@ -239,8 +234,7 @@ ARCHIVE_TOOLS = [
         'function': {
             'name': 'finalize_archive',
             'description': (
-                '提交归档分段方案。每条消息必须归属于某一段，不能遗漏、不能重叠。分段是按话题分，建议粗粒度不要太碎。'
-                '调用后不要写任何文字回复。'
+                'Submit the archive segments. Assign every message to exactly one segment, with no gaps or overlaps. Group by broad topics. Do not write a reply after this call.'
             ),
             'parameters': {
                 'type': 'object',
@@ -250,10 +244,10 @@ ARCHIVE_TOOLS = [
                         'items': {
                             'type': 'object',
                             'properties': {
-                                'start': {'type': 'integer', 'description': '起始消息编号'},
-                                'end': {'type': 'integer', 'description': '结束消息编号'},
-                                'title': {'type': 'string', 'description': '段落标题'},
-                                'summary': {'type': 'string', 'description': '段落摘要'},
+                                'start': {'type': 'integer', 'description': 'First message index (inclusive)'},
+                                'end': {'type': 'integer', 'description': 'Last message index (inclusive)'},
+                                'title': {'type': 'string', 'description': 'Segment title'},
+                                'summary': {'type': 'string', 'description': 'Segment summary'},
                             },
                             'required': ['start', 'end', 'title', 'summary'],
                         },
@@ -265,27 +259,24 @@ ARCHIVE_TOOLS = [
     },
 ]
 
-EXPLORE_TOOLS = CHAT_TOOLS  # 探索 = AI 先说话的聊天
+EXPLORE_TOOLS = CHAT_TOOLS  # Explore = Chat where AI speaks first
 
-# Serper API（对标 Flutter 端 search_web 工具）
-SERPER_API_KEY = os.environ.get('SERPER_API_KEY', 'f5906a5321623f7d082d5a2eb7a20a07291cba69')
+# Serper API (corresponds to the Flutter-side search_web tool)
+SERPER_API_KEY = os.environ.get('SERPER_API_KEY', '')
 
 
-# ===== 核心 API 调用 =====
+# ===== Core API calls =====
 
 def send_request(messages: list[dict], temperature: float = 0.7,
                  tools: list[dict] | None = None) -> dict:
-    """对标 Flutter AiService.sendRequest()
-
-    返回 {'content': str|None, 'reasoning': str|None, 'tool_calls': list|None}
-    """
+    """Return content, reasoning, and parsed tool calls from the model."""
     body = {
         'model': DEEPSEEK_MODEL,
         'messages': messages,
         'temperature': temperature,
     }
     if tools:
-        body['tools'] = tools
+        body['tools'] = localized_tools(tools)
 
     resp = requests.post(
         f'{DEEPSEEK_BASE_URL}/chat/completions',
@@ -328,14 +319,14 @@ def build_messages(tools: list[dict], conversation: list[dict],
                    memory_index: str | None = None,
                    history_index: str | None = None,
                    extra_indexes: dict[str, str] | None = None) -> list[dict]:
-    """构建消息列表 — soul 文件 + 动态 system prompt + 索引"""
-    from config import SOUL_PATH
+    """Build messages from account guidelines, tools, and retrieval indexes."""
+    from account_context import soul_path
 
     messages = []
 
     soul_content = ''
     try:
-        with open(SOUL_PATH, 'r', encoding='utf-8') as f:
+        with open(soul_path(), 'r', encoding='utf-8') as f:
             soul_content = f.read().strip()
     except Exception:
         pass
@@ -345,11 +336,11 @@ def build_messages(tools: list[dict], conversation: list[dict],
         sys_content += soul_content + '\n\n---\n\n'
     sys_content += build_system_prompt(tools)
     if date_note:
-        sys_content += f'\n\n[日期信息]\n{date_note}'
+        sys_content += tr('\n\n[Date]\n{0}').format(date_note)
     if history_index:
-        sys_content += f'\n\n[历史对话索引]\n{history_index}'
+        sys_content += tr('\n\n[Conversation index]\n{0}').format(history_index)
     if memory_index:
-        sys_content += f'\n\n[记忆索引]\n{memory_index}'
+        sys_content += tr('\n\n[Memory index]\n{0}').format(memory_index)
     if extra_indexes:
         for key, val in extra_indexes.items():
             sys_content += f'\n\n[{key}]\n{val}'

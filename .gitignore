@@ -44,7 +44,7 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# 隐私配置（API Key 等）
+# Private settings and API keys
 lib/services/secrets.dart
 agent/.env
 .env
@@ -52,7 +52,7 @@ agent/.env
 !.env.example
 agent/agent_soul.md
 
-# 运行数据、数据库及个人转写结果
+# Runtime data, databases, and personal transcripts
 agent/data/
 agent/logs/
 *.db
@@ -67,8 +67,12 @@ agent/logs/
 
 # Python
 __pycache__/
+.venv/
 *.pyc
 
-# 模型文件体积大，用 download_model.ps1 下载
+# Large speech models are downloaded with download_model.ps1
 assets/models/*
 !assets/models/.gitkeep
+
+*_subtitles*.srt
+*_transcript*.txt

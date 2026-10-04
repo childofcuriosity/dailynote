@@ -1,13 +1,18 @@
+import 'services/l10n.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'pages/home_page.dart';
+import 'pages/account_page.dart';
+import 'services/api_service.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:audio_session/audio_session.dart';
+// import 'package:audio_session/audio_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  initializeDateFormatting('zh_CN');
+  await initializeDateFormatting('zh_CN');
 
-  // 配置音频会话：语音通信模式，支持蓝牙耳机
+  // Configure audio session: voice communication mode, supports Bluetooth headsets
+  /* Voice disabled for the web application.
   final session = await AudioSession.instance;
   await session.configure(const AudioSessionConfiguration(
     avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
@@ -19,6 +24,7 @@ void main() async {
     ),
     androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
   ));
+  */
 
   runApp(const DailyNoteApp());
 }
@@ -28,13 +34,24 @@ class DailyNoteApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: '日记助手',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
+    return ValueListenableBuilder<String?>(
+      valueListenable: ApiService.sessionToken,
+      builder: (context, token, _) => MaterialApp(
+        key: ValueKey(token),
+        locale: Locale(AppLanguage.isChinese ? 'zh' : 'en'),
+        supportedLocales: const [Locale('en'), Locale('zh')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        title: tr("DailyNote"),
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+          useMaterial3: true,
+        ),
+        home: token == null ? const AccountPage() : const HomePage(),
       ),
-      home: const HomePage(),
     );
   }
 }

@@ -11,20 +11,18 @@ DATABASE_PATH = os.environ.get('DATABASE_PATH', os.path.join(DATA_DIR, 'dailynot
 
 # ===== HTTP API =====
 API_HOST = os.environ.get('API_HOST', '0.0.0.0')
-API_PORT = int(os.environ.get('API_PORT', '8080'))
+API_PORT = int(os.environ.get('API_PORT', '8081'))
 
-# ===== Agent 行为 =====
-CHECK_INTERVAL_MIN = int(os.environ.get('CHECK_INTERVAL_MIN', '30'))    # 最短检查间隔（秒）
-CHECK_INTERVAL_MAX = int(os.environ.get('CHECK_INTERVAL_MAX', '120'))   # 最长检查间隔（秒）
-EXPLORE_COOLDOWN_MIN = int(os.environ.get('EXPLORE_COOLDOWN_MIN', '4'))  # 探索冷却时间（小时）
-EXPLORE_COOLDOWN_MAX = int(os.environ.get('EXPLORE_COOLDOWN_MAX', '12')) # 探索最大间隔（小时）
-EXPLORE_PROBABILITY = float(os.environ.get('EXPLORE_PROBABILITY', '0.3'))  # 每次检查时探索的概率（冷却过后）
+# ===== Agent behavior =====
+CHECK_INTERVAL_MIN = int(os.environ.get('CHECK_INTERVAL_MIN', '30'))    # Minimum check interval (seconds)
+CHECK_INTERVAL_MAX = int(os.environ.get('CHECK_INTERVAL_MAX', '120'))   # Maximum check interval (seconds)
+EXPLORE_INTERVAL_DAYS = float(os.environ.get('EXPLORE_INTERVAL_DAYS', '10'))
 
-# ===== Soul 文件 =====
+# ===== Soul file =====
 SOUL_PATH = os.environ.get(
     'SOUL_PATH',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_soul.md'),
 )
 
-# ===== FCM（先占位）=====
+# ===== FCM (placeholder for now) =====
 FCM_CREDENTIALS_PATH = os.environ.get('FCM_CREDENTIALS_PATH', '')

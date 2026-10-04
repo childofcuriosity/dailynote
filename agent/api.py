@@ -1,8 +1,13 @@
-"""HTTP API — 给 Flutter App 调用的 REST 接口"""
+"""REST API for the Flutter web client."""
+from i18n import tr
 import json
 import threading
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
+from werkzeug.local import LocalProxy
+from werkzeug.middleware.proxy_fix import ProxyFix
+from auth import install_auth
+from account_context import soul_path
 from database import (
     list_conversations, get_conversation, create_conversation,
     update_conversation, delete_conversation, touch_conversation,
@@ -13,18 +18,20 @@ from database import (
 )
 
 app = Flask(__name__)
-app.json.ensure_ascii = False  # 中文不转义
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+app.json.ensure_ascii = False  # Do not escape Chinese
 
-_agent = None
+install_auth(app)
+_agents = {}
+_agent = LocalProxy(lambda: _agents.get(getattr(g, 'account', 'personal')))
 
 
-def set_agent(agent_ref):
-    global _agent
-    _agent = agent_ref
+def set_agent(agent_ref, account='personal'):
+    _agents[account] = agent_ref
 
 
 def _normalize_conv(c: dict) -> dict:
-    """SQLite 存 0/1，Flutter 期望 true/false"""
+    """Convert SQLite integer flags to JSON booleans."""
     c['pinned'] = bool(c.get('pinned', 0))
     c['hidden'] = bool(c.get('hidden', 0))
     c['archived'] = bool(c.get('archived', 0))
@@ -53,7 +60,7 @@ def api_get_conversation(conv_id):
 @app.post('/conversations')
 def api_create_conversation():
     body = request.get_json(silent=True) or {}
-    title = body.get('title', '新对话')
+    title = body.get('title', tr('New conversation'))
     conv = create_conversation(title=title, source=body.get('source', 'user'))
     return jsonify(conv), 201
 
@@ -83,11 +90,7 @@ def api_list_messages(conv_id):
 
 @app.post('/messages')
 def api_send_message():
-    """用户发送消息
-
-    ?wait=true  同步等待 AI 回复完成后返回（给 Flutter App 用）
-    不带 wait   立即返回，AI 后台异步回复
-    """
+    """Save a message; optionally wait for the AI reply with ?wait=true."""
     body = request.get_json(silent=True) or {}
     conv_id = body.get('conversation_id', '')
     content = body.get('content', '').strip()
@@ -107,7 +110,7 @@ def api_send_message():
 
     insert_message(conv_id, 'user', content)
 
-    # 语音模式：标记会话，agent 处理时通过 extra_messages 注入风格指令
+    # Voice mode: Mark the session; when the agent processes it, inject style instructions via extra_messages
     if voice_mode and _agent:
         _agent.mark_voice(conv_id)
 
@@ -125,7 +128,7 @@ def api_send_message():
 
 @app.post('/conversations/<conv_id>/fork')
 def api_fork_conversation(conv_id):
-    """Fork: 拷贝源会话前 count 条消息到新会话"""
+    """Fork the first count messages into a new conversation."""
     body = request.get_json(silent=True) or {}
     count = body.get('count', 0)
     title = body.get('title', 'Fork')
@@ -222,8 +225,8 @@ def api_set_conversation_tags(conv_id):
 
 @app.get('/soul')
 def api_get_soul():
-    """读取 agent_soul.md"""
-    from config import SOUL_PATH
+    """Read this account's behavior guidelines."""
+    SOUL_PATH = soul_path()
     try:
         with open(SOUL_PATH, 'r', encoding='utf-8') as f:
             return jsonify({'content': f.read()})
@@ -233,8 +236,8 @@ def api_get_soul():
 
 @app.put('/soul')
 def api_update_soul():
-    """写入 agent_soul.md"""
-    from config import SOUL_PATH
+    """Save this account's behavior guidelines."""
+    SOUL_PATH = soul_path()
     body = request.get_json(silent=True) or {}
     content = body.get('content', '')
     if not content:
@@ -251,7 +254,7 @@ def api_update_soul():
 
 @app.post('/conversations/<conv_id>/archive')
 def api_archive_conversation(conv_id):
-    """手动归档 — 委托 Agent 用同样的 function calling 流程"""
+    """Delegate manual archiving to the agent tool loop."""
     if _agent:
         _agent._archive_conversation(conv_id)
         return jsonify({'ok': True})
@@ -273,41 +276,41 @@ def api_status():
 
 @app.get('/admin/last-prompt')
 def api_last_prompt():
-    """调试：查看最后一次发给 AI 的完整 prompt"""
+    """Read the last model request for debugging."""
     from agent import get_last_prompt
     prompt = get_last_prompt()
     if not prompt:
-        return jsonify({'error': '还没有请求过 AI'}), 404
+        return jsonify({'error': tr('No model request recorded yet')}), 404
     return jsonify({'messages': prompt})
 
 
 @app.post('/admin/auto-archive')
 def api_trigger_auto_archive():
-    """手动触发自动归档"""
+    """Trigger the automatic archive scan."""
     if _agent:
         _agent._auto_archive_dirty()
-        return jsonify({'ok': True, 'message': '归档扫描完成'})
-    return jsonify({'ok': False, 'message': 'agent 未运行'}), 503
+        return jsonify({'ok': True, 'message': tr('Archive scan complete')})
+    return jsonify({'ok': False, 'message': tr('Agent is not running')}), 503
 
 
 @app.post('/admin/explore')
 def api_trigger_explore():
     if _agent:
         _agent.signal_explore()
-        return jsonify({'ok': True, 'message': '探索已触发'})
-    return jsonify({'ok': False, 'message': 'agent 未运行'}), 503
+        return jsonify({'ok': True, 'message': tr('Exploration requested')})
+    return jsonify({'ok': False, 'message': tr('Agent is not running')}), 503
 
 
 @app.post('/admin/test-tools')
 def api_test_tools():
-    """调试：直接测试 function calling"""
+    """Exercise tool calling for debugging."""
     from ai_client import send_request, build_messages, TOOLS
 
     body = request.get_json(silent=True) or {}
-    query = body.get('query', '查一下我的所有长期记忆')
+    query = body.get('query', tr('Look up all my long-term memories.'))
 
     today = datetime.now()
-    date_note = f'现在是 {today.year}年{today.month}月{today.day}日 {today.hour:02d}:{today.minute:02d}'
+    date_note = tr('Current date: {0}-{1}-{2} {3:02d}:{4:02d}').format(today.year, today.month, today.day, today.hour, today.minute)
     messages = build_messages(TOOLS, [
         {'role': 'user', 'content': query}
     ], date_note=date_note)

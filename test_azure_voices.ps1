@@ -1,16 +1,16 @@
 $dest = "E:\azure_tts_demo"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-# 从环境变量读取 key，防止泄露：
-#   $env:AZURE_SPEECH_KEY = "你的key"
+# Read the key from environment variables to prevent leaking:
+#   $env:AZURE_SPEECH_KEY = "your key"
 $key = $env:AZURE_SPEECH_KEY
 if (-not $key) {
-    Write-Host "请先设置环境变量 AZURE_SPEECH_KEY" -ForegroundColor Red
+    Write-Host "Set AZURE_SPEECH_KEY first" -ForegroundColor Red
     exit 1
 }
 
 $region = "eastasia"
-$text = "你好呀，我是你的语音助手。今天天气真好，想不想一起出去散散步喝杯奶茶呢？"
+$text = "Hello! I am your voice assistant. It is a lovely day. Would you like to go for a walk and get some tea?"
 
 # All Dragon HD female voices
 $voices = @(

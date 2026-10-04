@@ -1,21 +1,21 @@
-/// 复制此文件为 secrets.dart，填入你的配置
-/// secrets.dart 已在 .gitignore 中，不会被提交
+/// Copy this file to secrets.dart and fill in your configuration
+/// secrets.dart is already in .gitignore and will not be committed
 class Secrets {
   // ===== AI API =====
-  static const aiApiKey = 'sk-你的key';
-  static const aiBaseUrl = 'https://api.deepseek.com/v1'; // 换成任何 OpenAI 兼容的 API 地址
-  static const aiModel = 'deepseek-v4-pro';               // deepseek-chat / gpt-4o / moonshot-v1 等
+  static const aiApiKey = 'your-api-key';
+  static const aiBaseUrl = 'https://api.deepseek.com/v1'; // Replace with any OpenAI-compatible API address
+  static const aiModel = 'deepseek-v4-pro';               // deepseek-chat / gpt-4o / moonshot-v1, etc.
 
-  // ===== VPS Agent 服务地址（手机连服务器时填公网 IP，留空则用 localhost）=====
-  static const vpsBaseUrl = '';  // 如 'http://1.2.3.4:8080'
+  // ===== VPS Agent service address (fill in public IP when phone connects to server; leave empty to use localhost) =====
+  static const vpsBaseUrl = '';  // e.g. 'http://1.2.3.4:8081'
 
-  // ===== Azure 语音（TTS，可选）=====
-  static const azureSpeechKey = '';  // 如 '9zRx...'
+  // ===== Azure Speech (TTS, optional) =====
+  static const azureSpeechKey = '';  // e.g. '9zRx...'
 
-  // ===== Supabase 云同步（可选，留空则不启用）=====
-  static const supabaseUrl = '';  // 如 'https://xxx.supabase.co'
+  // ===== Supabase cloud sync (optional, leave empty to disable) =====
+  static const supabaseUrl = '';  // e.g. 'https://xxx.supabase.co'
   static const supabaseAnonKey = '';
 
-  // ===== 网页搜索（可选）=====
+  // ===== Web search (optional) =====
   static const serpapiApiKey = '';
 }

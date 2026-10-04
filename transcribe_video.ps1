@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$VideoPath,
@@ -29,7 +29,7 @@ function Find-FFmpeg {
         }
     }
 
-    throw '没有找到 ffmpeg.exe。请先安装 FFmpeg，或把 ffmpeg.exe 加入 PATH。'
+    throw 'ffmpeg.exe was not found. Install FFmpeg and add it to PATH.'
 }
 
 function Find-DartExe {
@@ -52,7 +52,7 @@ function Find-DartExe {
         return $knownDart
     }
 
-    throw '没有找到 Dart SDK。请先安装 Flutter，并确保 flutter/dart 在 PATH 中。'
+    throw 'Dart SDK was not found. Install Flutter and add flutter/dart to PATH.'
 }
 
 function Test-ReadableFile([string]$Path) {
@@ -96,7 +96,7 @@ function Find-ReadableModelDirectory([string]$ProjectRoot) {
         }
     }
 
-    throw '没有找到可读取的 SenseVoice 模型。请先运行 .\download_model.ps1；如果 DailyNote 正在运行并锁定模型，请关闭它后重试。'
+    throw 'No readable SenseVoice model found. Run .\download_model.ps1. If DailyNote has locked the model, close it and retry.'
 }
 
 function Get-AvailableOutputPair(
@@ -107,8 +107,8 @@ function Get-AvailableOutputPair(
     $number = 1
     while ($true) {
         $suffix = if ($number -eq 1) { '' } else { "_$number" }
-        $srt = Join-Path $Directory "${BaseName}_字幕${suffix}.srt"
-        $txt = Join-Path $Directory "${BaseName}_转写${suffix}.txt"
+        $srt = Join-Path $Directory "${BaseName}_subtitles${suffix}.srt"
+        $txt = Join-Path $Directory "${BaseName}_transcript${suffix}.txt"
         if ($Overwrite -or
             ((-not (Test-Path -LiteralPath $srt)) -and
              (-not (Test-Path -LiteralPath $txt)))) {
@@ -119,7 +119,7 @@ function Get-AvailableOutputPair(
 }
 
 if (-not (Test-Path -LiteralPath $VideoPath -PathType Leaf)) {
-    throw "视频文件不存在：$VideoPath"
+    throw "Video file does not exist: $VideoPath"
 }
 $resolvedVideo = (Resolve-Path -LiteralPath $VideoPath).Path
 
@@ -137,9 +137,9 @@ $packageConfig = Join-Path $projectRoot '.dart_tool\package_config.json'
 if (-not (Test-Path -LiteralPath $packageConfig -PathType Leaf)) {
     $flutter = Get-Command flutter -ErrorAction SilentlyContinue
     if (-not $flutter) {
-        throw '缺少 .dart_tool\package_config.json，并且没有找到 Flutter。请先运行 flutter pub get。'
+        throw 'Missing .dart_tool\package_config.json and Flutter was not found. Run flutter pub get first.'
     }
-    Write-Host '首次运行：正在执行 flutter pub get...'
+    Write-Host 'First run: running flutter pub get...'
     Push-Location $projectRoot
     try {
         & $flutter.Source pub get
@@ -147,7 +147,7 @@ if (-not (Test-Path -LiteralPath $packageConfig -PathType Leaf)) {
         Pop-Location
     }
     if ($LASTEXITCODE -ne 0) {
-        throw 'flutter pub get 失败。'
+        throw 'flutter pub get failed.'
     }
 }
 
@@ -156,17 +156,17 @@ $windowsPackage = $packageData.packages |
     Where-Object { $_.name -eq 'sherpa_onnx_windows' } |
     Select-Object -First 1
 if (-not $windowsPackage) {
-    throw '没有找到 sherpa_onnx_windows 依赖。请运行 flutter pub get。'
+    throw 'sherpa_onnx_windows was not found. Run flutter pub get.'
 }
 
 $packageUri = [System.Uri]$windowsPackage.rootUri
 if (-not $packageUri.IsFile) {
-    throw "无法解析 sherpa_onnx_windows 路径：$($windowsPackage.rootUri)"
+    throw "Cannot resolve sherpa_onnx_windows path: $($windowsPackage.rootUri)"
 }
 $sherpaDllDirectory = Join-Path $packageUri.LocalPath 'windows'
 foreach ($dllName in @('sherpa-onnx-c-api.dll', 'onnxruntime.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $sherpaDllDirectory $dllName) -PathType Leaf)) {
-        throw "缺少原生库：$dllName。请运行 flutter pub get。"
+        throw "Missing native library: $dllName. Run flutter pub get."
     }
 }
 
@@ -186,15 +186,15 @@ $oldPath = $env:PATH
 
 New-Item -ItemType Directory -Path $workDirectory | Out-Null
 try {
-    Write-Host "视频：$resolvedVideo"
-    Write-Host '正在提取音轨...'
+    Write-Host "Video: $resolvedVideo"
+    Write-Host 'Extracting audio...'
     & $ffmpeg -hide_banner -nostdin -y -i $resolvedVideo -map '0:a:0' -vn `
         -ac 1 -ar 16000 -c:a pcm_s16le $audioPath
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $audioPath)) {
-        throw '音轨提取失败；请确认视频包含可读取的音频。'
+        throw 'Audio extraction failed. Check that the video contains a readable audio track.'
     }
 
-    Write-Host '正在用 SenseVoice 离线识别...'
+    Write-Host 'Transcribing offline with SenseVoice...'
     $env:PATH = "$sherpaDllDirectory;$oldPath"
     & $dartExe "--packages=$packageConfig" $dartTool `
         $audioPath `
@@ -205,17 +205,17 @@ try {
         $srtPath `
         $txtPath
     if ($LASTEXITCODE -ne 0) {
-        throw "SenseVoice 识别失败，退出码：$LASTEXITCODE"
+        throw "SenseVoice failed with exit code: $LASTEXITCODE"
     }
     if (-not (Test-Path -LiteralPath $srtPath -PathType Leaf) -or
         -not (Test-Path -LiteralPath $txtPath -PathType Leaf)) {
-        throw '识别结束，但没有生成字幕文件。'
+        throw 'Transcription finished but no subtitle file was created.'
     }
 
     Write-Host ''
-    Write-Host '完成：'
-    Write-Host "  字幕：$srtPath"
-    Write-Host "  文稿：$txtPath"
+    Write-Host 'Done:'
+    Write-Host "  Subtitles: $srtPath"
+    Write-Host "  Transcript: $txtPath"
 } finally {
     $env:PATH = $oldPath
     if (Test-Path -LiteralPath $workDirectory) {

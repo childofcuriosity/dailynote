@@ -6,10 +6,10 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import 'utils.dart';
 
-/// VAD（Silero）检测语音边界 + SenseVoice 离线识别
-/// 单例：模型（~230MB）全局只加载一次
+/// VAD (Silero) detects speech boundaries + SenseVoice offline recognition
+/// Singleton: the model (~230MB) is loaded only once globally
 class SttService {
-  // ===== 单例 =====
+  // ===== Singleton =====
   static final SttService _instance = SttService._();
   factory SttService() => _instance;
   SttService._();
@@ -17,21 +17,21 @@ class SttService {
   sherpa.OfflineRecognizer? _recognizer;
   sherpa.VoiceActivityDetector? _vad;
   sherpa.CircularBuffer? _buffer;
-  static const _windowSize = 512; // Silero VAD 标准窗口大小（16kHz 下的固定值）
+  static const _windowSize = 512; // Silero VAD standard window size (fixed value at 16kHz)
   final AudioRecorder _recorder = AudioRecorder();
 
   StreamSubscription<Uint8List>? _audioSub;
   bool _isListening = false;
   bool _ready = false;
-  Future<void>? _initFuture; // 初始化进行中或已完成
+  Future<void>? _initFuture; // Initialization in progress or completed
 
-  /// 初始化状态：null=未开始, true=完成, false=失败
+  /// Initialization status: null=not started, true=completed, false=failed
   bool? get isInitialized => _initFuture == null ? null : _ready;
 
   static const _sampleRate = 16000;
   static const _modelDir = 'assets/models';
 
-  // 累积所有识别到的文字
+  // Accumulate all recognized text
   final StringBuffer _accumulated = StringBuffer();
 
   void Function(String)? _onPartial;
@@ -39,13 +39,13 @@ class SttService {
   bool get isListening => _isListening;
   bool get isAvailable => _ready;
 
-  // ========== 初始化（懒加载，只跑一次）==========
+  // ========== Initialization (lazy loading, runs only once) ==========
 
-  /// 确保已初始化。首次调用时加载模型（~2秒），后续调用瞬间返回。
+  /// Ensure initialized. Loads the model on first call (~2s); subsequent calls return instantly.
   Future<bool> ensureInitialized() async {
     if (_ready) return true;
 
-    // 如果已经在初始化中，等它完成
+    // If initialization is already in progress, wait for it to finish
     if (_initFuture != null) {
       await _initFuture;
       return _ready;
@@ -93,14 +93,14 @@ class SttService {
       ));
 
       _ready = true;
-      debugPrint('SttService: VAD + SenseVoice 初始化成功');
+      debugPrint('SttService: VAD + SenseVoice initialized');
     } catch (e) {
       _ready = false;
       debugPrint('SttService init error: $e');
     }
   }
 
-  // ========== 开始 / 停止 ==========
+  // ========== Start / Stop ==========
 
   void startListening({
     required void Function(String text) onPartial,
@@ -134,23 +134,23 @@ class SttService {
     if (_vad == null || _buffer == null || _recognizer == null) return;
 
     // PCM 16-bit → Float32
-    // 注意：必须 Uint8List.fromList 确保 buffer offset 从 0 开始
+    // Note: Must use Uint8List.fromList to ensure buffer offset starts at 0
     final samples = convertBytesToFloat32(Uint8List.fromList(data));
 
-    // 写入环形缓冲区
+    // Write to ring buffer
     _buffer!.push(samples);
 
-    // VAD 检测
+    // VAD detection
     while (_buffer!.size > _windowSize) {
       final window = _buffer!.get(startIndex: _buffer!.head, n: _windowSize);
       _buffer!.pop(_windowSize);
       _vad!.acceptWaveform(window);
 
-      // 处理检测到的语音段
+      // Process detected speech segments
       while (!_vad!.isEmpty()) {
         final segment = _vad!.front();
 
-        // SenseVoice 识别这个语音段
+        // SenseVoice recognizes this speech segment
         final stream = _recognizer!.createStream();
         stream.acceptWaveform(samples: segment.samples, sampleRate: _sampleRate);
         _recognizer!.decode(stream);
@@ -159,7 +159,7 @@ class SttService {
 
         _vad!.pop();
 
-        // 累积文字
+        // Accumulate text
         if (text.isNotEmpty) {
           if (_accumulated.isNotEmpty) {
             _accumulated.write(' ');
@@ -171,7 +171,7 @@ class SttService {
     }
   }
 
-  /// 停止收音，flush VAD 剩余数据，返回累积的全部文字
+  /// Stop recording, flush remaining VAD data, return all accumulated text
   Future<String> stop() async {
     if (!_isListening) return '';
     _isListening = false;
@@ -180,7 +180,7 @@ class SttService {
     _audioSub = null;
     await _recorder.stop();
 
-    // Flush VAD 中剩余的语音段
+    // Flush remaining speech segments in VAD
     _vad?.flush();
     while (_vad != null && !_vad!.isEmpty() && _recognizer != null) {
       final segment = _vad!.front();
@@ -204,7 +204,7 @@ class SttService {
     return result;
   }
 
-  /// 取消，丢弃所有数据
+  /// Cancel and discard all data
   Future<void> cancel() async {
     _isListening = false;
     await _audioSub?.cancel();

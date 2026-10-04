@@ -1,9 +1,9 @@
-"""入口 — 启动 HTTP API + Agent 后台循环"""
+"""Start the HTTP API and background account agents."""
 import sys
 import os
 import logging
 
-# 确保能找到同目录的模块
+# Ensure modules in the same directory can be found
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import (
@@ -11,6 +11,8 @@ from config import (
 )
 from api import app, set_agent
 from agent import Agent
+from demo_data import seed_demo
+from account_context import set_account
 
 
 def main():
@@ -21,30 +23,36 @@ def main():
     )
     logger = logging.getLogger('main')
 
-    # 检查必需配置
+    # Check required configuration
     if not DEEPSEEK_API_KEY:
-        logger.error('❌ DEEPSEEK_API_KEY 未设置！')
-        logger.error('  请在环境变量或 .env 文件中设置: export DEEPSEEK_API_KEY=sk-xxx')
+        logger.error('DEEPSEEK_API_KEY is not configured.')
+        logger.error('Set DEEPSEEK_API_KEY in the environment or .env file.')
         sys.exit(1)
 
-    # 确保数据目录存在
+    # Ensure the data directory exists
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # 启动 Agent
+    # Start the Agent
+    seed_demo()
+    demo_agent = Agent(account='demo')
+    demo_agent.start()
+    set_agent(demo_agent, 'demo')
+    set_account('personal')
     agent = Agent()
     agent.start()
     set_agent(agent)
 
-    logger.info(f'📂 数据目录: {DATA_DIR}')
-    logger.info(f'🌐 API 监听: {API_HOST}:{API_PORT}')
+    logger.info('Data directory: {0}'.format(DATA_DIR))
+    logger.info('API listening: {0}:{1}'.format(API_HOST, API_PORT))
 
     try:
         app.run(host=API_HOST, port=API_PORT, debug=False, use_reloader=False)
     except KeyboardInterrupt:
-        logger.info('收到退出信号')
+        logger.info('Shutdown signal received')
     finally:
         agent.stop()
-        logger.info('再见 👋')
+        demo_agent.stop()
+        logger.info('Goodbye')
 
 
 if __name__ == '__main__':

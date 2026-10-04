@@ -4,25 +4,25 @@ import 'package:permission_handler/permission_handler.dart';
 import 'stt_service.dart';
 import 'tts_service.dart';
 
-/// 语音状态
+/// Voice state
 enum VoiceState {
-  idle,       // 空闲
-  loading,    // 正在加载模型（首次）
-  listening,  // 正在听
-  processing, // 等 AI 回复
-  speaking,   // 正在朗读
+  idle,       // Idle
+  loading,    // Loading model (first time)
+  listening,  // Listening
+  processing, // Waiting for AI reply
+  speaking,   // Speaking
 }
 
-/// 协调 STT → API → TTS 的状态机
+/// State machine coordinating STT → API → TTS
 class VoiceController {
   final ValueNotifier<VoiceState> state = ValueNotifier(VoiceState.idle);
 
-  /// 实时识别的部分文字，UI 显示「正在听：xxx」
+  /// Partial text from real-time recognition, UI shows "Listening: xxx"
   final ValueNotifier<String> partialText = ValueNotifier('');
 
   final SttService _stt = SttService();
 
-  /// chat_page 注入：收识别文本 → 发后端 → 更新 UI → 返回 AI 回复文本
+  /// chat_page injection: receive recognized text → send to backend → update UI → return AI reply text
   Future<String> Function(String text)? onVoiceSend;
 
   bool _cancelled = false;
@@ -36,12 +36,12 @@ class VoiceController {
       }
       return Future<dynamic>.value();
     });
-    // 进聊天页抢占音频优先权 + 保持屏幕常亮，防止息屏时酷狗抢走按键
+    // When entering chat page, seize audio priority + keep screen on, to prevent Kugou from taking over the button when the screen is off
     _headsetChannel.invokeMethod('refreshPriority');
     _headsetChannel.invokeMethod('keepScreenOn');
   }
 
-  // ========== 按钮入口 ==========
+  // ========== Button entry ==========
 
   Future<void> toggle() async {
     switch (state.value) {
@@ -57,16 +57,16 @@ class VoiceController {
         state.value = VoiceState.idle;
 
       case VoiceState.speaking:
-        // barge-in：打断朗读，直接开始听新的
+        // barge-in: interrupt speaking and start listening for new input directly
         await TtsService().stop();
         await _startListening();
     }
   }
 
-  // ========== 内部流程 ==========
+  // ========== Internal flow ==========
 
   Future<void> _startListening() async {
-    // 权限检查
+    // Permission check
     var status = await Permission.microphone.status;
     if (!status.isGranted) {
       status = await Permission.microphone.request();
@@ -76,7 +76,7 @@ class VoiceController {
       }
     }
 
-    // 懒加载模型（首次 ~2s，后续 0ms）
+    // Lazy load model (first time ~2s, subsequent 0ms)
     if (!_stt.isAvailable) {
       state.value = VoiceState.loading;
       final ok = await _stt.ensureInitialized();
@@ -95,17 +95,17 @@ class VoiceController {
       },
       onDone: (_) {},
       onError: (error) {
-        debugPrint('VoiceController 录音错误: $error');
+        debugPrint('VoiceController recording error: $error');
         state.value = VoiceState.idle;
         partialText.value = error;
       },
     );
   }
 
-  /// 停止收音 → 有文字就发送，没文字回 idle
+  /// Stop capturing audio → if there is text, send it; if no text, return to idle
   Future<void> _stopAndSend() async {
     final text = await _stt.stop();
-    // 录音结束刷新优先权，防止息屏时酷狗抢走下次按键
+    // Refresh audio priority after recording ends, to prevent Kugou from taking over the next button press when the screen is off
     _headsetChannel.invokeMethod('refreshPriority');
     if (text.trim().isNotEmpty) {
       _onSpeechDone(text);
@@ -132,7 +132,7 @@ class VoiceController {
         await TtsService().speak(replyText);
       }
     } catch (e) {
-      // 网络错误等，静默回到 idle
+      // On network error etc., silently return to idle
     } finally {
       if (!_cancelled) {
         state.value = VoiceState.idle;
@@ -140,7 +140,7 @@ class VoiceController {
     }
   }
 
-  // ========== 控制 ==========
+  // ========== Control ==========
 
   void dispose() {
     _stt.cancel();

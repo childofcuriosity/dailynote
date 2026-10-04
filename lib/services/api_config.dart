@@ -1,8 +1,12 @@
-/// VPS API 地址
-/// 开发时用 localhost；手机连接时在 secrets.dart 里配置公网地址
-import 'secrets.dart';
-
+/// Web defaults to same-origin /api; can be overridden via --dart-define=API_BASE_URL=...
+/// Do not import secrets.dart, to avoid bringing service keys into browser builds.
 class ApiConfig {
-  static String get baseUrl =>
-      Secrets.vpsBaseUrl.isEmpty ? 'http://localhost:8080' : Secrets.vpsBaseUrl;
+  static const _override = String.fromEnvironment('API_BASE_URL');
+
+  static String get baseUrl {
+    final value = _override.isEmpty
+        ? Uri.base.resolve('/api').toString()
+        : _override;
+    return value.replaceFirst(RegExp(r'/+$'), '');
+  }
 }

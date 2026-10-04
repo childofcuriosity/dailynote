@@ -5,29 +5,44 @@ import uuid
 import threading
 from datetime import datetime
 from config import DATABASE_PATH, DATA_DIR
+from account_context import database_path
+from i18n import tr
 
 _local = threading.local()
 
 
 def get_db() -> sqlite3.Connection:
-    """线程安全的数据库连接"""
-    if not hasattr(_local, 'conn') or _local.conn is None:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        conn = sqlite3.connect(DATABASE_PATH)
+    """Return a thread-local connection for the current account."""
+    path = database_path()
+    if not hasattr(_local, 'connections'):
+        _local.connections = {}
+    if path not in _local.connections:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+        _local.connections[path] = conn
+    return _local.connections[path]
+
+
+def close_db():
+    for conn in getattr(_local, 'connections', {}).values():
+        conn.close()
+    _local.connections = {}
 
 
 def init_db():
-    """建表，幂等"""
+    """Create missing tables and columns idempotently."""
     db = get_db()
     db.executescript("""
+        CREATE TABLE IF NOT EXISTS scheduler_state (
+            name TEXT PRIMARY KEY,
+            timestamp REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
-            title TEXT NOT NULL DEFAULT '新对话',
+            title TEXT NOT NULL DEFAULT 'New conversation',
             summary TEXT,
             user_note TEXT,
             forked_from TEXT,
@@ -82,19 +97,19 @@ def init_db():
 
     """)
 
-    # 清理旧表
+    # Clean up old tables
     try:
         db.execute('DROP TABLE IF EXISTS explorer_log')
     except Exception:
         pass
 
-    # 迁移：旧表可能没有 reasoning 列
+    # Migration: Old tables may not have a reasoning column
     _migrate(db)
     db.commit()
 
 
 def _migrate(db: sqlite3.Connection):
-    """补齐旧表缺少的列"""
+    """Add columns missing from older databases."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(messages)').fetchall()}
     if 'reasoning' not in cols:
         db.execute('ALTER TABLE messages ADD COLUMN reasoning TEXT')
@@ -113,6 +128,23 @@ def _migrate(db: sqlite3.Connection):
         db.execute('ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
 
 
+def get_schedule_time(name: str) -> float | None:
+    row = get_db().execute('SELECT timestamp FROM scheduler_state WHERE name = ?', (name,)).fetchone()
+    return float(row[0]) if row else None
+
+
+def set_schedule_time(name: str, timestamp: float):
+    db = get_db()
+    db.execute('INSERT INTO scheduler_state (name, timestamp) VALUES (?, ?) '
+               'ON CONFLICT(name) DO UPDATE SET timestamp = excluded.timestamp', (name, timestamp))
+    db.commit()
+
+
+def latest_exploration_time() -> float | None:
+    row = get_db().execute("SELECT MAX(created_at) FROM conversations WHERE source IN ('explore_raw', 'explorer')").fetchone()
+    return row[0] / 1000 if row and row[0] is not None else None
+
+
 def now_ms() -> int:
     return int(datetime.now().timestamp() * 1000)
 
@@ -129,7 +161,7 @@ def list_conversations(source: str | None = None) -> list[dict]:
         return [dict(r) for r in db.execute(
             'SELECT * FROM conversations WHERE source = ? ORDER BY last_active_at DESC',
             (source,)).fetchall()]
-    # 返回全部会话，由客户端（Flutter）自己过滤 hidden
+    # Return all sessions; the client (Flutter) filters hidden itself
     return [dict(r) for r in db.execute(
         'SELECT * FROM conversations ORDER BY last_active_at DESC').fetchall()]
 
@@ -140,7 +172,8 @@ def get_conversation(conv_id: str) -> dict | None:
     return dict(r) if r else None
 
 
-def create_conversation(title: str = '新对话', source: str = 'user') -> dict:
+def create_conversation(title: str | None = None, source: str = 'user') -> dict:
+    title = title if title is not None else tr('New conversation')
     db = get_db()
     cid = new_id()
     now = now_ms()
@@ -153,6 +186,10 @@ def create_conversation(title: str = '新对话', source: str = 'user') -> dict:
 
 def update_conversation(conv_id: str, **kwargs):
     db = get_db()
+    allowed = {'title', 'summary', 'user_note', 'forked_from', 'source',
+               'pinned', 'hidden', 'archived', 'created_at', 'last_active_at',
+               'last_archived_at'}
+    kwargs = {key: value for key, value in kwargs.items() if key in allowed}
     if not kwargs:
         return
     kwargs['updated_at'] = now_ms()
@@ -171,7 +208,7 @@ def touch_conversation(conv_id: str):
 
 
 def get_dirty_conversations() -> list[dict]:
-    """今天之前创建、5分钟未活跃、未归档、非隐藏、仅用户会话"""
+    """Select visible, unarchived user conversations created before today and idle for five minutes."""
     today_start_ms = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
     five_min_ago_ms = now_ms() - 5 * 60 * 1000
 
@@ -188,7 +225,7 @@ def get_dirty_conversations() -> list[dict]:
         d = dict(r)
         last_archived = d.get('last_archived_at')
         last_active = d['last_active_at']
-        # archived 标记未设，或归档后有新消息
+        # archived flag is not set, or there are new messages after archiving
         if not d.get('archived') or last_active > (last_archived or 0):
             results.append(d)
     return results
@@ -217,7 +254,7 @@ def list_messages(conv_id: str) -> list[dict]:
 
 def insert_message(conv_id: str, role: str, content: str, reasoning: str | None = None) -> dict:
     if role == 'system':
-        return {'id': '', 'role': 'system', 'content': ''}  # system 不进 DB
+        return {'id': '', 'role': 'system', 'content': ''}  # system is not stored in the DB
     db = get_db()
     mid = new_id()
     now = now_ms()
@@ -231,7 +268,7 @@ def insert_message(conv_id: str, role: str, content: str, reasoning: str | None 
 
 
 def copy_message(orig_id: str, target_conv_id: str):
-    """拷贝消息到目标会话，保留原始 created_at 和 reasoning"""
+    """Copy a message, preserving its timestamp and reasoning."""
     db = get_db()
     orig = db.execute('SELECT * FROM messages WHERE id = ?', (orig_id,)).fetchone()
     if not orig:
@@ -254,7 +291,7 @@ def get_last_message(conv_id: str) -> dict | None:
 
 
 def get_unreplied_conversations() -> list[str]:
-    """找最后一条是 user 消息的会话（AI 还没回复）"""
+    """Find conversations whose most recent message needs a reply."""
     db = get_db()
     rows = db.execute("""
         SELECT m.conversation_id FROM messages m
@@ -269,7 +306,7 @@ def get_unreplied_conversations() -> list[str]:
 
 
 def get_recent_conversation_context(conv_id: str, limit: int = 1000) -> list[dict]:
-    """取最近 N 条消息，用于 AI 上下文"""
+    """Load the most recent N messages for model context."""
     db = get_db()
     rows = db.execute(
         'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?',
@@ -297,7 +334,7 @@ def insert_memory(content: str, source_conv_id: str | None = None,
     db = get_db()
     mid = new_id()
     now = now_ms()
-    # 自动生成 name（如果没有提供）
+    # Auto-generate name (if not provided)
     if not name:
         name = mid[:8]
     db.execute(
@@ -309,17 +346,20 @@ def insert_memory(content: str, source_conv_id: str | None = None,
 
 
 def load_memory(mid: str) -> dict | None:
-    """读取单条记忆全文"""
+    """Read one full memory."""
     db = get_db()
     r = db.execute('SELECT * FROM memories WHERE id = ?', (mid,)).fetchone()
     return dict(r) if r else None
 
 
-def update_memory(mid: str, content: str, name: str | None = None,
+def update_memory(mid: str, content: str | None = None, name: str | None = None,
                   description: str | None = None, mem_type: str | None = None):
     db = get_db()
-    sets = ['content = ?', 'updated_at = ?']
-    vals = [content, now_ms()]
+    sets = ['updated_at = ?']
+    vals = [now_ms()]
+    if content is not None:
+        sets.append('content = ?')
+        vals.append(content)
     if name is not None:
         sets.append('name = ?')
         vals.append(name)
@@ -362,7 +402,7 @@ def get_or_create_tag(name: str) -> str:
 
 
 def create_tag(name: str) -> str:
-    """独立的创建标签（不查重），返回 id"""
+    """Create a tag and return its ID."""
     return get_or_create_tag(name)
 
 

@@ -1,13 +1,15 @@
+import '../services/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../models/conversation.dart';
 import '../services/api_service.dart';
-import '../services/voice/voice_controller.dart';
-import '../widgets/voice_mic_button.dart';
+// import '../services/voice/voice_controller.dart';
+// import '../widgets/voice_mic_button.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
-// ============ 与旧版完全一致的 LaTeX 渲染 ============
+// ============ LaTeX rendering exactly the same as the old version ============
 
 List<Widget> _buildContentWithLatex(String text, BuildContext context) {
   final regex = RegExp(r'\$\$(.+?)\$\$|\$(.+?)\$');
@@ -16,39 +18,72 @@ List<Widget> _buildContentWithLatex(String text, BuildContext context) {
 
   for (final match in regex.allMatches(text)) {
     if (match.start > start) {
-      widgets.add(MarkdownBody(
-        data: text.substring(start, match.start),
-        styleSheet: MarkdownStyleSheet(
-          p: DefaultTextStyle.of(context).style,
-          code: TextStyle(backgroundColor: Colors.grey.shade300, fontSize: 13, fontFamily: 'monospace'),
-          codeblockDecoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(8)),
+      widgets.add(
+        MarkdownBody(
+          data: text.substring(start, match.start),
+          styleSheet: MarkdownStyleSheet(
+            p: DefaultTextStyle.of(context).style,
+            code: TextStyle(
+              backgroundColor: Colors.grey.shade300,
+              fontSize: 13,
+              fontFamily: 'monospace',
+            ),
+            codeblockDecoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
         ),
-      ));
+      );
     }
     final isBlock = match.group(0)!.startsWith(r'$$');
     final tex = (isBlock ? match.group(1) : match.group(2)) ?? '';
     final formula = isBlock
-        ? Center(child: Math.tex(tex, mathStyle: MathStyle.display, textStyle: const TextStyle(fontSize: 18)))
-        : Math.tex(tex, mathStyle: MathStyle.text, textStyle: const TextStyle(fontSize: 16));
-    widgets.add(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(tex, style: const TextStyle(fontSize: 0)),
-      formula,
-    ]));
+        ? Center(
+            child: Math.tex(
+              tex,
+              mathStyle: MathStyle.display,
+              textStyle: TextStyle(fontSize: 18),
+            ),
+          )
+        : Math.tex(
+            tex,
+            mathStyle: MathStyle.text,
+            textStyle: TextStyle(fontSize: 16),
+          );
+    widgets.add(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tex, style: TextStyle(fontSize: 0)),
+          formula,
+        ],
+      ),
+    );
     start = match.end;
   }
 
   if (start < text.length) {
-    widgets.add(MarkdownBody(
-      data: text.substring(start),
-      styleSheet: MarkdownStyleSheet(
-        p: DefaultTextStyle.of(context).style,
-        code: TextStyle(backgroundColor: Colors.grey.shade300, fontSize: 13, fontFamily: 'monospace'),
-        codeblockDecoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(8)),
+    widgets.add(
+      MarkdownBody(
+        data: text.substring(start),
+        styleSheet: MarkdownStyleSheet(
+          p: DefaultTextStyle.of(context).style,
+          code: TextStyle(
+            backgroundColor: Colors.grey.shade300,
+            fontSize: 13,
+            fontFamily: 'monospace',
+          ),
+          codeblockDecoration: BoxDecoration(
+            color: Colors.grey.shade300,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
       ),
-    ));
+    );
   }
 
-  return widgets.isEmpty ? [const Text('')] : widgets;
+  return widgets.isEmpty ? [Text('')] : widgets;
 }
 
 // ============ ChatPage ============
@@ -69,28 +104,28 @@ class _ChatPageState extends State<ChatPage> {
   final List<Map<String, dynamic>> _messages = [];
   final Set<int> _expandedReasoning = {};
   String? _conversationId;
-  String _convTitle = '新对话';
+  String _convTitle = tr("New conversation");
   String? _convSummary;
   String? _convNote;
   bool _isLoading = false;
 
-  late final VoiceController _voiceController;
+  // late final VoiceController _voiceController;
 
   @override
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
-    _voiceController.dispose();
+    // _voiceController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
-    _voiceController = VoiceController();
-    _voiceController.onVoiceSend = _sendVoiceText;
-    // 模型懒加载：首次按麦克风时才初始化，打开会话不卡
+    // _voiceController = VoiceController();
+    // _voiceController.onVoiceSend = _sendVoiceText;
+    // Lazy-load models: initialize only when the microphone is first pressed, so opening a session won't lag
 
     if (widget.conversationId != null) {
       _conversationId = widget.conversationId;
@@ -103,20 +138,24 @@ class _ChatPageState extends State<ChatPage> {
     final conv = await _api.getConversation(_conversationId!);
     if (!mounted) return;
     setState(() {
-      _convTitle = conv?.title ?? '新对话';
+      _convTitle = conv?.title ?? tr("New conversation");
       _convSummary = conv?.summary;
       _convNote = conv?.userNote;
-      _messages.addAll(messages.map((m) => {
-        'role': m.role,
-        'content': m.content,
-        'reasoning': m.reasoning,
-        'time': m.createdAt.millisecondsSinceEpoch,
-      }));
+      _messages.addAll(
+        messages.map(
+          (m) => {
+            'role': m.role,
+            'content': m.content,
+            'reasoning': m.reasoning,
+            'time': m.createdAt.millisecondsSinceEpoch,
+          },
+        ),
+      );
     });
     _scrollToBottom();
   }
 
-  // ============ 发送消息 — 全交给 VPS ============
+  // ============ Send message — all handled by VPS ============
 
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
@@ -126,13 +165,18 @@ class _ChatPageState extends State<ChatPage> {
     await _sendTextAsMessage(text);
   }
 
-  /// 语音回调用的接口，返回 AI 回复文本供 TTS 朗读
+  /// Interface for voice callback: returns AI reply text for TTS to read aloud
+  /* Voice disabled.
   Future<String> _sendVoiceText(String text) async {
     return await _sendTextAsMessage(text, voiceMode: true);
   }
+  */
 
-  /// 核心发送逻辑，文字和语音共用
-  Future<String> _sendTextAsMessage(String text, {bool voiceMode = false}) async {
+  /// Core sending logic, shared by text and voice
+  Future<String> _sendTextAsMessage(
+    String text, {
+    bool voiceMode = false,
+  }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     setState(() {
       _messages.add({'role': 'user', 'content': text, 'time': now});
@@ -166,7 +210,7 @@ class _ChatPageState extends State<ChatPage> {
 
       _scrollToBottom();
 
-      // 返回 AI 回复文本（语音模式需要朗读）
+      // Returns AI reply text (voice mode needs to read it aloud)
       final lastAssistant = serverMessages
           .where((m) => m['role'] == 'assistant')
           .toList();
@@ -174,20 +218,20 @@ class _ChatPageState extends State<ChatPage> {
           ? (lastAssistant.last['content'] as String? ?? '')
           : '';
     } catch (e) {
-      if (!mounted) return '出错了';
+      if (!mounted) return tr("Something went wrong");
       setState(() {
         _messages.add({
           'role': 'assistant',
-          'content': '出错了：$e',
+          'content': tr("Error: {0}", [e]),
           'time': DateTime.now().millisecondsSinceEpoch,
         });
         _isLoading = false;
       });
-      return '出错了：$e';
+      return tr("Error: {0}", [e]);
     }
   }
 
-  // ============ 编辑 / Fork ============
+  // ============ Edit / Fork ============
 
   Future<void> _editMessage(Map<String, dynamic> msg) async {
     final displayMsgs = _displayMessages;
@@ -198,24 +242,34 @@ class _ChatPageState extends State<ChatPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('编辑消息'),
+        title: Text(tr("Edit message")),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('将创建新对话（Fork），原对话保留。',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-            const SizedBox(height: 8),
+            Text(
+              tr(
+                "This creates a new conversation branch and keeps the original.",
+              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+            SizedBox(height: 8),
             TextField(
               controller: editController,
               maxLines: 5,
               autofocus: true,
-              decoration: const InputDecoration(border: OutlineInputBorder()),
+              decoration: InputDecoration(border: OutlineInputBorder()),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Fork 并发送')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr("Cancel")),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(tr("Branch and send")),
+          ),
         ],
       ),
     );
@@ -229,14 +283,14 @@ class _ChatPageState extends State<ChatPage> {
     final ancestorCount = editIndex;
 
     try {
-      // VPS 端 Fork：创建新会话 + 拷贝前 ancestorCount 条消息
+      // VPS-side fork: create a new session + copy the previous ancestorCount messages
       final newConvId = await _api.forkConversation(
         _conversationId!,
         count: ancestorCount,
         title: newText,
       );
 
-      // 切到新会话，追加祖先前消息
+      // Switch to the new session and append the messages before the ancestor
       setState(() {
         _conversationId = newConvId;
         _messages.clear();
@@ -245,26 +299,30 @@ class _ChatPageState extends State<ChatPage> {
         }
       });
 
-      // 发送编辑后的消息
+      // Send the edited message
       _controller.text = newText;
       await _sendMessage();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已创建新分支（Fork），原对话保留')),
+          SnackBar(
+            content: Text(
+              tr("New branch created. The original conversation is preserved."),
+            ),
+          ),
         );
       }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Fork 失败：$e')),
+          SnackBar(content: Text(tr("Could not create branch: {0}", [e]))),
         );
       }
     }
   }
 
-  // ============ 编辑元数据 ============
+  // ============ Edit metadata ============
 
   Future<void> _showEditDialog() async {
     final titleCtrl = TextEditingController(text: _convTitle);
@@ -274,45 +332,76 @@ class _ChatPageState extends State<ChatPage> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('编辑'),
+        title: Text(tr("Edit")),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: '标题')),
-            const SizedBox(height: 8),
-            TextField(controller: summaryCtrl, decoration: const InputDecoration(labelText: '摘要'), maxLines: 3),
-            const SizedBox(height: 8),
-            TextField(controller: noteCtrl, decoration: const InputDecoration(labelText: '备注', hintText: '如：#重要 #待办')),
+            TextField(
+              controller: titleCtrl,
+              decoration: InputDecoration(labelText: tr("Title")),
+            ),
+            SizedBox(height: 8),
+            TextField(
+              controller: summaryCtrl,
+              decoration: InputDecoration(labelText: tr("Summary")),
+              maxLines: 3,
+            ),
+            SizedBox(height: 8),
+            TextField(
+              controller: noteCtrl,
+              decoration: InputDecoration(
+                labelText: tr("Notes"),
+                hintText: tr("For example: #important #todo"),
+              ),
+            ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(onPressed: () {
-            setState(() {
-              _convTitle = titleCtrl.text.trim().isEmpty ? _convTitle : titleCtrl.text.trim();
-              _convSummary = summaryCtrl.text.trim().isEmpty ? null : summaryCtrl.text.trim();
-              _convNote = noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim();
-            });
-            if (_conversationId != null) {
-              _api.getConversation(_conversationId!).then((c) {
-                if (c != null) {
-                  _api.updateConversation(Conversation(
-                    uuid: c.uuid, title: _convTitle, summary: _convSummary,
-                    userNote: _convNote, forkedFrom: c.forkedFrom,
-                    createdAt: c.createdAt, lastActiveAt: c.lastActiveAt,
-                    lastArchivedAt: c.lastArchivedAt,
-                  ));
-                }
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr("Cancel")),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _convTitle = titleCtrl.text.trim().isEmpty
+                    ? _convTitle
+                    : titleCtrl.text.trim();
+                _convSummary = summaryCtrl.text.trim().isEmpty
+                    ? null
+                    : summaryCtrl.text.trim();
+                _convNote = noteCtrl.text.trim().isEmpty
+                    ? null
+                    : noteCtrl.text.trim();
               });
-            }
-            Navigator.pop(ctx);
-          }, child: const Text('保存')),
+              if (_conversationId != null) {
+                _api.getConversation(_conversationId!).then((c) {
+                  if (c != null) {
+                    _api.updateConversation(
+                      Conversation(
+                        uuid: c.uuid,
+                        title: _convTitle,
+                        summary: _convSummary,
+                        userNote: _convNote,
+                        forkedFrom: c.forkedFrom,
+                        createdAt: c.createdAt,
+                        lastActiveAt: c.lastActiveAt,
+                        lastArchivedAt: c.lastArchivedAt,
+                      ),
+                    );
+                  }
+                });
+              }
+              Navigator.pop(ctx);
+            },
+            child: Text(tr("Save")),
+          ),
         ],
       ),
     );
   }
 
-  // ============ 归档 — 交给 VPS ============
+  // ============ Archive — handled by VPS ============
 
   Future<void> _archive() async {
     final instructionController = TextEditingController();
@@ -321,25 +410,36 @@ class _ChatPageState extends State<ChatPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('归档这段对话'),
+        title: Text(tr("Archive this conversation")),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('AI 将自动生成标题、摘要并提取记忆'),
-            const SizedBox(height: 8),
+            Text(
+              tr("AI will create titles and summaries and extract memories."),
+            ),
+            SizedBox(height: 8),
             TextField(
               controller: instructionController,
-              decoration: const InputDecoration(hintText: '有什么特别要求？（选填）', border: OutlineInputBorder()),
+              decoration: InputDecoration(
+                hintText: tr("Any special instructions? (optional)"),
+                border: OutlineInputBorder(),
+              ),
               maxLines: 2,
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          TextButton(onPressed: () {
-            instruction = instructionController.text.trim();
-            Navigator.pop(ctx, true);
-          }, child: const Text('归档')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(tr("Cancel")),
+          ),
+          TextButton(
+            onPressed: () {
+              instruction = instructionController.text.trim();
+              Navigator.pop(ctx, true);
+            },
+            child: Text(tr("Archive")),
+          ),
         ],
       ),
     );
@@ -362,14 +462,16 @@ class _ChatPageState extends State<ChatPage> {
       if (segments != null && segments > 1) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已拆分为 $segments 条日记')),
+            SnackBar(
+              content: Text(tr("Split into {0} diary entries", [segments])),
+            ),
           );
           Navigator.pop(context);
         }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已归档：${title ?? _convTitle}')),
+            SnackBar(content: Text(tr("Archived: {0}", [title ?? _convTitle]))),
           );
         }
         if (title != null) setState(() => _convTitle = title);
@@ -378,24 +480,29 @@ class _ChatPageState extends State<ChatPage> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('归档失败：$e')),
+        SnackBar(content: Text(tr("Could not archive: {0}", [e]))),
       );
     }
   }
 
-  // ============ UI 辅助（与旧版一致）============
+  // ============ UI helpers (same as old version) ============
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients && _scrollController.position.maxScrollExtent > 0) {
+      if (_scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent > 0) {
         _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
     });
   }
 
-  List<Map<String, dynamic>> get _displayMessages =>
-      _messages.where((m) => m['content'] != null &&
-          (m['role'] == 'user' || m['role'] == 'assistant')).toList();
+  List<Map<String, dynamic>> get _displayMessages => _messages
+      .where(
+        (m) =>
+            m['content'] != null &&
+            (m['role'] == 'user' || m['role'] == 'assistant'),
+      )
+      .toList();
 
   String _formatTime(int ms) {
     final dt = DateTime.fromMillisecondsSinceEpoch(ms);
@@ -406,11 +513,13 @@ class _ChatPageState extends State<ChatPage> {
     final minute = dt.minute.toString().padLeft(2, '0');
     final timeStr = '$hour:$minute';
     if (msgDay == today) return timeStr;
-    if (dt.year == now.year) return '${dt.month}月${dt.day}日 $timeStr';
-    return '${dt.year}年${dt.month}月${dt.day}日 $timeStr';
+    final date = dt.year == now.year
+        ? DateFormat.MMMd(AppLanguage.locale).format(dt)
+        : DateFormat.yMMMd(AppLanguage.locale).format(dt);
+    return '$date $timeStr';
   }
 
-  // ============ Build（UI 结构完全不变）============
+  // ============ Build (UI structure completely unchanged) ============
 
   @override
   Widget build(BuildContext context) {
@@ -423,11 +532,19 @@ class _ChatPageState extends State<ChatPage> {
         final stay = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('AI 正在回复'),
-            content: const Text('离开会丢失本次回复，确定要离开吗？'),
+            title: Text(tr("AI is replying")),
+            content: Text(
+              tr("A reply is in progress. Leave this conversation?"),
+            ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('留下')),
-              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('离开')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(tr("Stay")),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(tr("Leave")),
+              ),
             ],
           ),
         );
@@ -445,43 +562,64 @@ class _ChatPageState extends State<ChatPage> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Flexible(child: Text(_convTitle, overflow: TextOverflow.ellipsis)),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.edit, size: 14, color: Colors.white70),
+                    Flexible(
+                      child: Text(_convTitle, overflow: TextOverflow.ellipsis),
+                    ),
+                    SizedBox(width: 4),
+                    Icon(Icons.edit, size: 14, color: Colors.white70),
                   ],
                 ),
                 if (_convSummary != null && _convSummary!.isNotEmpty)
-                  Text(_convSummary!, style: const TextStyle(fontSize: 11, color: Colors.white70),
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    _convSummary!,
+                    style: TextStyle(fontSize: 11, color: Colors.white70),
+                    overflow: TextOverflow.ellipsis,
+                  ),
               ],
             ),
           ),
           actions: [
             if (_messages.length >= 2)
-              IconButton(icon: const Icon(Icons.archive_outlined), tooltip: '归档', onPressed: _archive),
+              IconButton(
+                icon: Icon(Icons.archive_outlined),
+                tooltip: tr("Archive"),
+                onPressed: _archive,
+              ),
           ],
         ),
         body: Column(
           children: [
             Expanded(
               child: _messages.isEmpty
-                  ? const Center(child: Text('开始对话吧'))
+                  ? Center(child: Text(tr("Start a conversation")))
                   : ListView.builder(
                       controller: _scrollController,
                       itemCount: _displayMessages.length,
                       itemBuilder: (context, index) {
                         final msg = _displayMessages[index];
                         final isUser = msg['role'] == 'user';
-                        final timeText = msg['time'] != null ? _formatTime(msg['time'] as int) : '';
+                        final timeText = msg['time'] != null
+                            ? _formatTime(msg['time'] as int)
+                            : '';
                         final reasoning = msg['reasoning'] as String?;
-                        final showReasoning = !isUser && reasoning != null && reasoning.isNotEmpty;
+                        final showReasoning =
+                            !isUser &&
+                            reasoning != null &&
+                            reasoning.isNotEmpty;
 
                         final bubble = Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                          padding: const EdgeInsets.all(12),
-                          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+                          margin: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          padding: EdgeInsets.all(12),
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.8,
+                          ),
                           decoration: BoxDecoration(
-                            color: isUser ? Colors.teal.shade100 : Colors.grey.shade200,
+                            color: isUser
+                                ? Colors.teal.shade100
+                                : Colors.grey.shade200,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Column(
@@ -499,27 +637,51 @@ class _ChatPageState extends State<ChatPage> {
                                     });
                                   },
                                   child: Container(
-                                    margin: const EdgeInsets.only(bottom: 8),
-                                    padding: const EdgeInsets.all(8),
+                                    margin: EdgeInsets.only(bottom: 8),
+                                    padding: EdgeInsets.all(8),
                                     decoration: BoxDecoration(
                                       color: Colors.yellow.shade50,
                                       borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: Colors.yellow.shade200),
+                                      border: Border.all(
+                                        color: Colors.yellow.shade200,
+                                      ),
                                     ),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Row(mainAxisSize: MainAxisSize.min, children: [
-                                          Icon(_expandedReasoning.contains(index)
-                                              ? Icons.expand_less : Icons.expand_more,
-                                              size: 16, color: Colors.orange.shade700),
-                                          const SizedBox(width: 4),
-                                          Text('思考过程', style: TextStyle(
-                                              fontSize: 12, fontWeight: FontWeight.bold, color: Colors.orange.shade700)),
-                                        ]),
-                                        if (_expandedReasoning.contains(index)) ...[
-                                          const SizedBox(height: 4),
-                                          SelectableText(reasoning, style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              _expandedReasoning.contains(index)
+                                                  ? Icons.expand_less
+                                                  : Icons.expand_more,
+                                              size: 16,
+                                              color: Colors.orange.shade700,
+                                            ),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              tr("Reasoning and tools"),
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.orange.shade700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        if (_expandedReasoning.contains(
+                                          index,
+                                        )) ...[
+                                          SizedBox(height: 4),
+                                          SelectableText(
+                                            reasoning,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade700,
+                                            ),
+                                          ),
                                         ],
                                       ],
                                     ),
@@ -528,58 +690,89 @@ class _ChatPageState extends State<ChatPage> {
                               SelectionArea(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: _buildContentWithLatex(msg['content']!, context),
+                                  children: _buildContentWithLatex(
+                                    msg['content']!,
+                                    context,
+                                  ),
                                 ),
                               ),
                               if (timeText.isNotEmpty)
                                 Padding(
-                                  padding: const EdgeInsets.only(top: 4),
-                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                    Text(timeText, style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
-                                    const SizedBox(width: 8),
-                                    GestureDetector(
-                                      onTap: () {
-                                        Clipboard.setData(ClipboardData(text: msg['content']!));
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)),
-                                        );
-                                      },
-                                      child: Icon(Icons.copy, size: 13, color: Colors.grey.shade500),
-                                    ),
-                                  ]),
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        timeText,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                      SizedBox(width: 8),
+                                      GestureDetector(
+                                        onTap: () {
+                                          Clipboard.setData(
+                                            ClipboardData(
+                                              text: msg['content']!,
+                                            ),
+                                          );
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(tr("Copied")),
+                                              duration: Duration(seconds: 1),
+                                            ),
+                                          );
+                                        },
+                                        child: Icon(
+                                          Icons.copy,
+                                          size: 13,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                             ],
                           ),
                         );
                         return Align(
-                          alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+                          alignment: isUser
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
                           child: isUser
-                              ? GestureDetector(onLongPress: () => _editMessage(msg), child: bubble)
+                              ? GestureDetector(
+                                  onLongPress: () => _editMessage(msg),
+                                  child: bubble,
+                                )
                               : bubble,
                         );
                       },
                     ),
             ),
             Padding(
-              padding: const EdgeInsets.all(8),
+              padding: EdgeInsets.all(8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 语音状态提示
+                  // Voice status hint
+                  /* Voice disabled.
                   ValueListenableBuilder<VoiceState>(
                     valueListenable: _voiceController.state,
                     builder: (context, state, _) {
-                      if (state == VoiceState.idle) return const SizedBox.shrink();
+                      if (state == VoiceState.idle) return SizedBox.shrink();
                       if (state == VoiceState.loading) {
                         return Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          margin: const EdgeInsets.only(bottom: 4),
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          margin: EdgeInsets.only(bottom: 4),
                           decoration: BoxDecoration(
                             color: Colors.blue.shade50,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text('正在加载语音模型...',
+                          child: Text(tr("Loading speech model…"),
                             style: TextStyle(fontSize: 13, color: Colors.blue.shade700)),
                         );
                       }
@@ -588,8 +781,8 @@ class _ChatPageState extends State<ChatPage> {
                         builder: (context, partial, _) {
                           return Container(
                             width: double.infinity,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            margin: const EdgeInsets.only(bottom: 4),
+                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            margin: EdgeInsets.only(bottom: 4),
                             decoration: BoxDecoration(
                               color: state == VoiceState.listening
                                   ? Colors.red.shade50
@@ -600,10 +793,10 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                             child: Text(
                               state == VoiceState.listening
-                                  ? (partial.isNotEmpty ? '正在听: $partial' : '正在听...')
+                                  ? (partial.isNotEmpty ? tr("Listening: {0}", [partial]) : tr("Listening…"))
                                   : state == VoiceState.processing
-                                      ? 'AI 正在思考...'
-                                      : 'AI 正在回复...',
+                                      ? tr("AI is thinking…")
+                                      : tr("AI is replying…"),
                               style: TextStyle(
                                 fontSize: 13,
                                 color: state == VoiceState.listening
@@ -618,38 +811,52 @@ class _ChatPageState extends State<ChatPage> {
                       );
                     },
                   ),
-                  // 输入行
-                  Row(children: [
-                    // 麦克风按钮
-                    VoiceMicButton(controller: _voiceController),
-                    Expanded(
-                      child: CallbackShortcuts(
-                        bindings: {
-                          const SingleActivator(LogicalKeyboardKey.enter, control: true): () {
-                            if (!_isLoading) _sendMessage();
+                  // Input row
+                  */
+                  Row(
+                    children: [
+                      // Microphone button
+                      // VoiceMicButton(controller: _voiceController),
+                      Expanded(
+                        child: CallbackShortcuts(
+                          bindings: {
+                            SingleActivator(
+                              LogicalKeyboardKey.enter,
+                              control: true,
+                            ): () {
+                              if (!_isLoading) _sendMessage();
+                            },
                           },
-                        },
-                        child: TextField(
-                          controller: _controller,
-                          focusNode: _focusNode,
-                          maxLines: 10,
-                          minLines: 1,
-                          textInputAction: TextInputAction.newline,
-                          decoration: const InputDecoration(
-                            hintText: '输入内容... (Enter换行, Ctrl+Enter发送)',
-                            border: OutlineInputBorder(),
+                          child: TextField(
+                            controller: _controller,
+                            focusNode: _focusNode,
+                            maxLines: 10,
+                            minLines: 1,
+                            textInputAction: TextInputAction.newline,
+                            decoration: InputDecoration(
+                              hintText: tr(
+                                "Write a message… (Enter for a new line, Ctrl+Enter to send)",
+                              ),
+                              border: OutlineInputBorder(),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      onPressed: _isLoading ? null : _sendMessage,
-                      icon: _isLoading
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.send),
-                    ),
-                  ]),
+                      SizedBox(width: 8),
+                      IconButton(
+                        onPressed: _isLoading ? null : _sendMessage,
+                        icon: _isLoading
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(Icons.send),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),

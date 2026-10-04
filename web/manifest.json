@@ -1,11 +1,11 @@
 {
-    "name": "dailynote",
-    "short_name": "dailynote",
+    "name": "DailyNote",
+    "short_name": "DailyNote",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "A web diary with AI memories and discoveries.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

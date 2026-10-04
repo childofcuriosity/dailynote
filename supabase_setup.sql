@@ -1,11 +1,11 @@
 -- ========================================
--- 日记助手 (DailyNote) Supabase 建表脚本
+-- Diary Assistant (DailyNote) Supabase table creation script
 -- ========================================
--- 在 Supabase SQL Editor 中执行本脚本
--- https://supabase.com/dashboard → 你的项目 → SQL Editor
--- 提示：选 "Run without RLS"，执行完再补 RLS
+-- Execute this script in the Supabase SQL Editor
+-- https://supabase.com/dashboard → your project → SQL Editor
+-- Tip: select "Run without RLS", then add RLS after execution
 
--- 1. conversations 会话表
+-- 1. conversations table
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   updated_at BIGINT NOT NULL
 );
 
--- 2. messages 消息表
+-- 2. messages table
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS messages (
   updated_at BIGINT NOT NULL
 );
 
--- 3. memories 记忆表
+-- 3. memories table
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
   content TEXT NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS memories (
   updated_at BIGINT NOT NULL
 );
 
--- 4. tags 标签表
+-- 4. tags table
 CREATE TABLE IF NOT EXISTS tags (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS tags (
   updated_at BIGINT NOT NULL
 );
 
--- 5. conversation_tags 会话-标签关联表
+-- 5. conversation_tags conversation-tag association table
 CREATE TABLE IF NOT EXISTS conversation_tags (
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS conversation_tags (
 );
 
 -- ========================================
--- 索引
+-- Indexes
 -- ========================================
 CREATE INDEX idx_messages_conv ON messages(conversation_id);
 CREATE INDEX idx_messages_updated ON messages(updated_at);
@@ -64,7 +64,7 @@ CREATE INDEX idx_tags_updated ON tags(updated_at);
 CREATE INDEX idx_memories_content ON memories(content);
 
 -- ========================================
--- RLS (Row Level Security) — 个人项目：全开放
+-- RLS (Row Level Security) — personal project: fully open
 -- ========================================
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;

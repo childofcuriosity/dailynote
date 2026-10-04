@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/voice/voice_controller.dart';
 
-/// 语音麦克风按钮，根据 VoiceState 切换图标和颜色
+/// Voice microphone button, switches icon and color according to VoiceState
 class VoiceMicButton extends StatelessWidget {
   final VoiceController controller;
 
@@ -29,7 +29,7 @@ class VoiceMicButton extends StatelessWidget {
               color: Colors.red,
               pulse: true,
               onTap: () => controller.toggle(),
-              tooltip: '取消录音',
+              tooltip: 'Cancel recording',
             );
 
           case VoiceState.processing:
@@ -48,7 +48,7 @@ class VoiceMicButton extends StatelessWidget {
               color: Colors.green,
               pulse: false,
               onTap: () => controller.toggle(),
-              tooltip: '打断朗读',
+              tooltip: 'Interrupt speech',
             );
 
           case VoiceState.idle:
@@ -57,7 +57,7 @@ class VoiceMicButton extends StatelessWidget {
               color: Colors.grey.shade600,
               pulse: false,
               onTap: () => controller.toggle(),
-              tooltip: '开始语音',
+              tooltip: 'Start voice input',
             );
         }
       },

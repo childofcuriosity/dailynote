@@ -1,4 +1,4 @@
-"""互联网探索模块 — 搜索不同来源，返回发现"""
+"""Search and fetch content from multiple public sources."""
 import logging
 import time
 import urllib.parse
@@ -7,7 +7,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# arxiv API 很友好，不需 key
+# The arxiv API is friendly and requires no key
 ARXIV_API = 'http://export.arxiv.org/api/query'
 
 # HackerNews
@@ -15,11 +15,11 @@ HN_API = 'https://hacker-news.firebaseio.com/v0'
 
 
 def search_arxiv(query: str, max_results: int = 5) -> list[dict]:
-    """搜 arxiv 论文 — 官方 API 直连优先（HTTPS 可通），ddgs 兜底"""
+    """Search arXiv through its API, falling back to ddgs."""
     try:
         import xml.etree.ElementTree as ET
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
-        # 国内直连偶发抖动，重试一次
+        # Direct connections from within China occasionally jitter; retry once
         for attempt in range(2):
             try:
                 resp = requests.get('https://export.arxiv.org/api/query', params={
@@ -44,14 +44,14 @@ def search_arxiv(query: str, max_results: int = 5) -> list[dict]:
             if results:
                 return results
     except Exception as e:
-        logger.warning(f'arxiv 官方 API 失败: {e}')
+        logger.warning('arXiv API failed: {0}'.format(e))
 
-    # ddgs 兜底
+    # ddgs fallback
     try:
         try:
-            from duckduckgo_search import DDGS  # 8.x 包名
+            from duckduckgo_search import DDGS  # 8.x package name
         except ImportError:
-            from ddgs import DDGS  # 旧版包名
+            from ddgs import DDGS  # Legacy package name
         results = []
         with DDGS() as ddgs:
             for r in ddgs.text(f'site:arxiv.org {query}', max_results=max_results):
@@ -63,25 +63,25 @@ def search_arxiv(query: str, max_results: int = 5) -> list[dict]:
                 })
         return results
     except ImportError:
-        logger.warning('ddgs 未安装，跳过 arxiv 搜索')
+        logger.warning('ddgs is not installed; skipping arXiv search')
         return []
     except Exception as e:
-        logger.warning(f'arxiv(ddgs) 搜索失败: {e}')
+        logger.warning('arXiv ddgs search failed: {0}'.format(e))
         return []
 
 
 def search_hackernews(query: str = '', top_n: int = 10) -> list[dict]:
-    """搜 HackerNews — 如果不搜特定词就拉热榜"""
+    """Search Hacker News, or fetch top stories without a query."""
     try:
         if query:
-            # HN 搜索（Algolia API，免费）
+            # HN search (Algolia API, free)
             url = 'https://hn.algolia.com/api/v1/search'
             resp = requests.get(url, params={'query': query, 'hitsPerPage': top_n}, timeout=10)
             if resp.status_code != 200:
                 return []
             hits = resp.json().get('hits', [])
         else:
-            # 热榜
+            # Trending
             top_ids = requests.get(f'{HN_API}/topstories.json', timeout=10).json()[:top_n]
             hits = []
             for tid in top_ids:
@@ -99,17 +99,17 @@ def search_hackernews(query: str = '', top_n: int = 10) -> list[dict]:
             })
         return results
     except Exception as e:
-        logger.warning(f'HN 搜索失败: {e}')
+        logger.warning('HN search failed: {0}'.format(e))
         return []
 
 
 def search_web(query: str, max_results: int = 5) -> list[dict]:
-    """通用网页搜索（ddgs）"""
+    """Search the web with ddgs."""
     try:
         try:
-            from duckduckgo_search import DDGS  # 8.x 包名
+            from duckduckgo_search import DDGS  # 8.x package name
         except ImportError:
-            from ddgs import DDGS  # 旧版包名
+            from ddgs import DDGS  # Legacy package name
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
         return [
@@ -122,15 +122,15 @@ def search_web(query: str, max_results: int = 5) -> list[dict]:
             for r in results
         ]
     except ImportError:
-        logger.warning('ddgs 未安装，跳过网页搜索')
+        logger.warning('ddgs is not installed; skipping web search')
         return []
     except Exception as e:
-        logger.warning(f'网页搜索失败: {e}')
+        logger.warning('Web search failed: {0}'.format(e))
         return []
 
 
 def search_github_trending(language: str = '') -> list[dict]:
-    """GitHub trending（非官方，从 JSON endpoint 拉）"""
+    """Discover popular GitHub repositories."""
     try:
         url = 'https://api.github.com/search/repositories'
         params = {
@@ -153,7 +153,7 @@ def search_github_trending(language: str = '') -> list[dict]:
             })
         return results
     except Exception as e:
-        logger.warning(f'GitHub 搜索失败: {e}')
+        logger.warning('GitHub search failed: {0}'.format(e))
         return []
 
 
@@ -166,39 +166,38 @@ def _days_ago(n: int) -> str:
 
 
 def fetch_url(url: str) -> str:
-    """抓取网页内容，提取正文，返回纯文本。最多 3000 字符。"""
+    """Fetch and extract up to 3,000 characters of page text."""
     try:
         import trafilatura
         resp = requests.get(url, timeout=15, headers={
             'User-Agent': 'Mozilla/5.0 (compatible; DailyNote/1.0)',
         })
         if resp.status_code != 200:
-            return f'无法访问 ({resp.status_code})'
+            return 'Unable to access ({0})'.format(resp.status_code)
 
         text = trafilatura.extract(resp.text,
                                    include_comments=False,
                                    include_tables=False,
                                    output_format='txt')
         if not text:
-            return '未提取到正文内容'
+            return 'No article text could be extracted'
 
         return text[:3000]
     except ImportError:
-        return 'trafilatura 未安装，无法抓取网页'
+        return 'trafilatura is not installed; unable to fetch page text'
     except Exception as e:
-        return f'抓取失败: {e}'
+        return 'Fetch failed: {0}'.format(e)
 
 
 def fetch_rendered(url: str, wait_ms: int = 5000) -> str:
-    """无头浏览器渲染页面后提取正文。适合 fetch_url 抓不到正文的动态页面（JS 渲染）。
-    较慢（约 5-10 秒），只有 fetch_url 结果不满意时再用。最多 3000 字符。"""
+    """Render a JavaScript page and extract up to 3,000 characters. Use after a plain fetch fails."""
     try:
         import glob
         import os
         import trafilatura
         from playwright.sync_api import sync_playwright
 
-        # 用完整 chromium 跑 headless（headless shell 国内下载极慢，不依赖它）
+        # Use full Chromium to run headless (headless shell downloads extremely slowly in China; don't rely on it)
         chrome_candidates = glob.glob(
             os.path.expanduser('~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome'))
         chrome_path = chrome_candidates[0] if chrome_candidates else None
@@ -211,12 +210,10 @@ def fetch_rendered(url: str, wait_ms: int = 5000) -> str:
             )
             try:
                 page = browser.new_page(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                               'AppleWebKit/537.36 (KHTML, like Gecko) '
-                               'Chrome/126.0.0.0 Safari/537.36',
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                 )
                 page.goto(url, timeout=30000, wait_until='domcontentloaded')
-                # 等 JS 异步加载正文
+                # Wait for JavaScript to asynchronously load the body
                 page.wait_for_timeout(wait_ms)
                 html = page.content()
             finally:
@@ -227,9 +224,9 @@ def fetch_rendered(url: str, wait_ms: int = 5000) -> str:
                                    include_tables=False,
                                    output_format='txt')
         if not text:
-            return '渲染后仍未提取到正文'
+            return 'No article text found after rendering'
         return text[:3000]
     except ImportError as e:
-        return f'依赖未安装: {e}'
+        return 'Missing dependency: {0}'.format(e)
     except Exception as e:
-        return f'渲染抓取失败: {e}'
+        return 'Rendered fetch failed: {0}'.format(e)

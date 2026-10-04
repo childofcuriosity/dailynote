@@ -1,4 +1,4 @@
-# 下载 sherpa-onnx 语音模型：Silero VAD + SenseVoice（中英日韩粤）
+# Download sherpa-onnx speech models: Silero VAD + SenseVoice (Chinese, English, Japanese, Korean, Cantonese)
 # SenseVoice int8 ~200MB | silero_vad ~2MB
 
 $dest = Join-Path $PSScriptRoot "assets\models"

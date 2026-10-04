@@ -1,4 +1,6 @@
-"""Agent 核心 — 常驻循环，监听消息 + function calling 回复 + 主动探索"""
+"""Background agent: replies, tool calls, proactive exploration, and archiving."""
+from i18n import tr
+from account_context import get_account
 import json
 import logging
 import random
@@ -7,6 +9,7 @@ import time
 from datetime import datetime
 
 import requests
+from account_context import set_account, debug_path
 
 from database import (
     init_db,
@@ -17,6 +20,7 @@ from database import (
     insert_memory, update_memory, delete_memory,
     get_dirty_conversations, update_conversation, set_conversation_tags, now_ms,
     load_memory, get_last_message, copy_message, delete_conversation,
+    get_schedule_time, set_schedule_time, latest_exploration_time,
 )
 from ai_client import (
     send_request, build_messages,
@@ -28,15 +32,16 @@ from explorer import (
 )
 from config import (
     CHECK_INTERVAL_MIN, CHECK_INTERVAL_MAX,
-    EXPLORE_COOLDOWN_MIN, EXPLORE_COOLDOWN_MAX,
-    EXPLORE_PROBABILITY,
+    EXPLORE_INTERVAL_DAYS,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, account: str = 'personal'):
+        self.account = account
+        self._context = threading.local()
         self._running = False
         self._thread: threading.Thread | None = None
         self._new_message_event = threading.Event()
@@ -46,39 +51,41 @@ class Agent:
         self._today_date = ''
         self._lock = threading.Lock()
         self._exploring = False
-        self._reply_events: dict[str, threading.Event] = {}  # conv_id → Event，API 同步等待用
-        self._voice_convs: set[str] = set()  # 语音模式的会话，处理后清理
+        self._reply_events: dict[str, threading.Event] = {}  # conv_id → Event, used for API synchronous waiting
+        self._voice_convs: set[str] = set()  # Voice mode sessions, cleaned up after processing
         self._last_archive_time = 0.0
 
-    # ===== 生命周期 =====
+    # ===== Lifecycle =====
 
     def start(self):
+        set_account(self.account)
         init_db()
+        self._initialize_schedule()
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name='agent-loop')
         self._thread.start()
-        logger.info('Agent 已启动')
+        logger.info(tr('Agent started'))
 
     def stop(self):
         self._running = False
         if self._thread:
             self._thread.join(timeout=10)
-        logger.info('Agent 已停止')
+        logger.info(tr('Agent stopped'))
 
     def status(self) -> str:
         if not self._running:
             return 'stopped'
-        return f'running (今日已发 {self._today_message_count} 条主动消息)'
+        return tr('running (proactive messages today: {0})').format(self._today_message_count)
 
     def signal_new_message(self, conv_id: str):
         self._new_message_event.set()
 
     def mark_voice(self, conv_id: str):
-        """标记会话为语音模式，处理时注入口语化风格指令"""
+        """Mark a conversation for concise spoken responses."""
         self._voice_convs.add(conv_id)
 
     def wait_for_reply(self, conv_id: str, timeout: float = 120) -> dict | None:
-        """同步等待某会话的 AI 回复完成，返回最后一条消息"""
+        """Wait for a reply and return the last message."""
         event = threading.Event()
         self._reply_events[conv_id] = event
         self._new_message_event.set()
@@ -91,10 +98,11 @@ class Agent:
     def signal_explore(self):
         self._explore_event.set()
 
-    # ===== 主循环 =====
+    # ===== Main loop =====
 
     def _loop(self):
-        logger.info('Agent 循环开始')
+        set_account(self.account)
+        logger.info(tr('Agent loop started'))
         while self._running:
             try:
                 self._handle_pending_replies()
@@ -104,7 +112,7 @@ class Agent:
                     threading.Thread(target=self._do_explore, daemon=True, name='explore').start()
                     self._explore_event.clear()
 
-                # 4. 每隔几小时跑一次自动归档
+                # 4. Run automatic archival every few hours
                 if self._should_auto_archive():
                     self._auto_archive_dirty()
 
@@ -115,7 +123,7 @@ class Agent:
             self._new_message_event.wait(timeout=interval)
             self._new_message_event.clear()
 
-    # ===== 回复用户消息（对标 Flutter _chatLoop + _executeTool）=====
+    # ===== Reply to user messages (mirroring Flutter _chatLoop + _executeTool) =====
 
     def _handle_pending_replies(self):
         conv_ids = get_unreplied_conversations()
@@ -127,20 +135,20 @@ class Agent:
                 if conv_id in self._voice_convs:
                     self._voice_convs.discard(conv_id)
                     extra = [{'role': 'system', 'content':
-                        '[语音模式] 用户通过语音输入。语音识别可能有误，结合上下文猜测真实意图。请用口语化、简洁的风格回复，'
-                        '像朋友闲聊一样，简短，不要长篇大论。'}]
+                        tr('[Voice mode] Speech recognition may contain errors. Infer intent from context and respond briefly in a conversational style.')}]
                 self._process(conv_id, CHAT_TOOLS, extra_messages=extra)
             except Exception:
-                logger.exception(f'回复会话 {conv_id} 失败')
+                logger.exception(tr('Reply to conversation {0} failed').format(conv_id))
 
     def _process(self, conv_id: str, tools: list[dict],
                  extra_messages: list[dict] | None = None,
                  use_history: bool = True):
-        """通用处理入口：聊天/探索/归档共用"""
+        """Shared processing loop for chat, exploration, and archiving."""
+        set_account(self.account)
         self._current_conv_id = conv_id
         history = get_recent_conversation_context(conv_id) if use_history else []
 
-        # 探索/归档通过 extra_messages 注入指令，history 可以为空
+        # Exploration/archival inject instructions via extra_messages; history can be empty
         if not extra_messages:
             if not history:
                 return
@@ -148,8 +156,8 @@ class Agent:
             if last['role'] not in ('user', 'system'):
                 return
 
-        # 构建对话历史（不包含 tool 消息——它们没有 tool_call_id，API 会报错）
-        # 历史不带 reasoning：新 user 消息开启新轮次后，DS 允许清掉历史 reasoning
+        # Build conversation history (excluding tool messages—they have no tool_call_id and the API will error)
+        # History does not include reasoning: after a new user message starts a new turn, DS allows clearing historical reasoning
         conversation = [
             {'role': m['role'], 'content': m['content']}
             for m in history if m['role'] in ('user', 'assistant', 'system')
@@ -157,19 +165,19 @@ class Agent:
         if extra_messages:
             conversation.extend(extra_messages)
 
-        # 对标 Flutter _ai.buildMessages(systemPrompt, dateNote, conversation)
+        # Mirrors Flutter _ai.buildMessages(systemPrompt, dateNote, conversation)
         today = datetime.now()
-        date_note = f'现在是 {today.year}年{today.month}月{today.day}日 {today.hour:02d}:{today.minute:02d}'
+        date_note = tr('Current date: {0}-{1}-{2} {3:02d}:{4:02d}').format(today.year, today.month, today.day, today.hour, today.minute)
 
-        # 构建记忆索引（name + description + type）
+        # Build memory index (name + description + type)
         mems = list_memories()
         memory_index = '\n'.join(
             f'[{m["id"]}] [{m.get("type", "fact")}] {m.get("name", m["id"][:8])}: {m.get("description", "")}'
             for m in mems
-        ) if mems else '暂无记忆'
+        ) if mems else tr('No memories yet')
 
-        # 构建对话历史索引（title + summary + date + tags）
-        # 只列归档后的会话：未归档的和归档内容重复，探索会话不属于用户主动对话
+        # Build conversation history index (title + summary + date + tags)
+        # Only list archived conversations: unarchived ones duplicate archived content, and exploration conversations are not user-initiated dialogues
         convs = [c for c in list_conversations() if c.get('source') == 'archive']
         history_parts = []
         for c in convs:
@@ -179,21 +187,21 @@ class Agent:
             tags = get_conversation_tags(c['id'])
             tag_str = f' [{", ".join(tags)}]' if tags else ''
             history_parts.append(
-                f'[{c["id"]}] {date_str} | {c["title"]}{tag_str}\n  {c.get("summary") or "无摘要"}'
+                f'[{c["id"]}] {date_str} | {c["title"]}{tag_str}\n  {c.get("summary") or tr("No summary")}'
             )
-        history_index = '\n\n'.join(history_parts) if history_parts else '暂无历史对话'
+        history_index = '\n\n'.join(history_parts) if history_parts else tr('No conversation history yet')
 
         messages = build_messages(tools, conversation,
                                   date_note=date_note,
                                   memory_index=memory_index,
                                   history_index=history_index)
 
-        # 对标 Flutter _chatLoop() — 最多 5 轮 function calling
+        # Mirrors Flutter _chatLoop() — up to 5 rounds of function calling
         reasoning = None
         reply = ''
         archive_done = False
 
-        # 收集工具调用链，循环结束后一条存入 DB
+        # Collect the tool call chain and store it as one record in the DB after the loop ends
         _thought_chain: list[str] = []
 
         for loop_count in range(8):
@@ -202,16 +210,14 @@ class Agent:
             if not result['tool_calls']:
                 reply = result['content'] or ''
                 reasoning = result['reasoning']
-                logger.info(f'AI 直接回复 [{conv_id}], tool_calls 轮数: {loop_count}, '
-                            f'reasoning={bool(reasoning)} len={len(reasoning or "")}')
+                logger.info(tr('AI replied [{0}], tool-call rounds: {1}, reasoning={2} len={3}').format(conv_id, loop_count, bool(reasoning), len(reasoning or '')))
                 break
 
-            logger.info(f'AI tool_calls [{conv_id}] 第{loop_count+1}轮: '
-                        f'{[tc["name"] for tc in result["tool_calls"]]}')
+            logger.info(tr('AI tool_calls [{0}] round {1}: {2}').format(conv_id, loop_count + 1, [tc['name'] for tc in result['tool_calls']]))
 
             reasoning_text = result.get('reasoning')
 
-            # 构建 tool_calls 消息（保持 reasoning_content 注入下一轮）
+            # Build tool_calls message (preserve reasoning_content to inject into the next round)
             tc_msg = {
                 'role': 'assistant',
                 'tool_calls': [
@@ -228,17 +234,17 @@ class Agent:
             }
             if reasoning_text:
                 tc_msg['reasoning_content'] = reasoning_text
-                _thought_chain.append(f'[思考] {reasoning_text}')
+                _thought_chain.append(tr('[Reasoning] {0}').format(reasoning_text))
 
             messages.append(tc_msg)
 
-            # 执行工具并注入结果
+            # Execute tools and inject results
             for tc in result['tool_calls']:
                 tool_result = self._execute_tool(tc['name'], tc['arguments'])
                 messages.append({
                     'role': 'tool',
                     'tool_call_id': tc['id'],
-                    'content': tool_result if tool_result != '__ARCHIVE_DONE__' else '归档完成。',
+                    'content': tool_result if tool_result != '__ARCHIVE_DONE__' else tr('Archive complete.'),
                 })
                 if tool_result == '__ARCHIVE_DONE__':
                     archive_done = True
@@ -251,22 +257,22 @@ class Agent:
                 _thought_chain.clear()
                 break
         else:
-            # 轮数用尽，不加工具让 AI 基于已有信息直接回复
+            # Rounds exhausted, do not add tools; let the AI reply directly based on existing information
             final = send_request(messages, temperature=0.7, tools=None)
             reply = final['content'] or ''
             reasoning = final['reasoning']
 
         all_reasoning = list(_thought_chain)
         if reasoning:
-            all_reasoning.append(f'[思考] {reasoning}')
+            all_reasoning.append(tr('[Reasoning] {0}').format(reasoning))
 
         if tools is not ARCHIVE_TOOLS:
             if reply or all_reasoning:
                 insert_message(conv_id, 'assistant', reply,
                                reasoning='\n\n'.join(all_reasoning) if all_reasoning else None)
-        logger.info(f'已回复会话 [{conv_id}]')
+        logger.info(tr('Replied to conversation [{0}]').format(conv_id))
 
-        # 调试：保存完整 prompt（含所有 function calling 轮次 + 最终回复 + reasoning）
+        # Debug: Save full prompt (including all function calling rounds + final reply + reasoning)
         debug_msgs = list(messages)
         debug_msgs.append({
             'role': 'assistant',
@@ -275,13 +281,13 @@ class Agent:
         })
         _save_debug_prompt(debug_msgs)
 
-        # 通知同步等待的 API 调用者
+        # Notify API callers waiting synchronously
         event = self._reply_events.pop(conv_id, None)
         if event:
             event.set()
 
     def _execute_tool(self, name: str, args: dict) -> str:
-        """对标 Flutter _executeTool()"""
+        """Execute a model tool call within the current account."""
         if name == 'load_conversation':
             conv_id = args['conversation_id']
             msgs = list_messages(conv_id)
@@ -290,8 +296,8 @@ class Agent:
             header = ''
             if conv:
                 tag_str = f' [{", ".join(tags)}]' if tags else ''
-                header = f'对话: {conv["title"]}{tag_str}\n'
-            role_label = {'user': '用户', 'assistant': 'AI'}
+                header = tr('Conversation: {0}{1}\n').format(conv['title'], tag_str)
+            role_label = {'user': tr('User'), 'assistant': 'AI'}
             return header + '\n'.join(
                 f'[{role_label.get(m["role"], m["role"])}]: {m["content"]}'
                 for m in msgs
@@ -300,8 +306,8 @@ class Agent:
         elif name == 'load_memory':
             m = load_memory(args['id'])
             if not m:
-                return f'未找到记忆 ID:{args["id"]}'
-            return f'记忆 [{m.get("type", "fact")}] {m.get("name", "")}\n描述: {m.get("description", "")}\n内容: {m["content"]}'
+                return tr('Memory not found: {0}').format(args['id'])
+            return tr('Memory [{0}] {1}\nDescription: {2}\nContent: {3}').format(m.get('type', 'fact'), m.get('name', ''), m.get('description', ''), m['content'])
 
         elif name == 'search_web':
             return self._search_web(args['query'])
@@ -309,7 +315,7 @@ class Agent:
         elif name == 'search_arxiv':
             results = search_arxiv(args['query'])
             if not results:
-                return '未找到相关论文。'
+                return tr('No relevant papers found.')
             return '\n\n'.join(
                 f'{r["title"]}\n  {r["summary"]}\n  {r["url"]}'
                 for r in results
@@ -318,7 +324,7 @@ class Agent:
         elif name == 'search_hackernews':
             results = search_hackernews(args.get('query', ''))
             if not results:
-                return '未找到相关新闻。'
+                return tr('No relevant news found.')
             return '\n\n'.join(
                 f'{r["title"]}\n  {r["summary"]}\n  {r["url"]}'
                 for r in results
@@ -328,7 +334,7 @@ class Agent:
             query = args.get('query', '')
             results = search_github_trending(query) if query else search_github_trending()
             if not results:
-                return '未找到相关仓库。'
+                return tr('No relevant repositories found.')
             return '\n\n'.join(
                 f'{r["title"]}\n  {r["summary"]}\n  {r["url"]}'
                 for r in results
@@ -379,11 +385,19 @@ class Agent:
                 update_conversation(self._current_conv_id, **kw)
             return 'ok'
 
-        return f'未知工具: {name}'
+        return tr('Unknown tool: {0}').format(name)
+
+    @property
+    def _current_conv_id(self):
+        return self._context.conv_id
+
+    @_current_conv_id.setter
+    def _current_conv_id(self, value):
+        self._context.conv_id = value
 
     @staticmethod
     def _search_web(query: str) -> str:
-        """网页搜索 — Serper 优先，ddgs 兜底"""
+        """Search with Serper, falling back to ddgs."""
         # Serper
         try:
             resp = requests.post(
@@ -392,7 +406,8 @@ class Agent:
                     'X-API-KEY': SERPER_API_KEY,
                     'Content-Type': 'application/json',
                 },
-                json={'q': query, 'gl': 'cn', 'hl': 'zh-cn'},
+                json={'q': query, 'gl': 'cn' if (get_account() == 'personal') else 'us',
+                      'hl': 'zh-cn' if (get_account() == 'personal') else 'en'},
                 timeout=15,
             )
             if resp.status_code == 200:
@@ -406,7 +421,7 @@ class Agent:
         except Exception:
             pass
 
-        # ddgs 兜底
+        # ddgs fallback
         try:
             from explorer import search_web as ddgs_search
             results = ddgs_search(query)
@@ -418,32 +433,46 @@ class Agent:
         except Exception:
             pass
 
-        return '搜索未找到结果。'
+        return tr('No search results found.')
 
-    # ===== 主动探索 =====
+    # ===== Active exploration =====
+
+    def _initialize_schedule(self):
+        # Each account persists its own schedule in its existing SQLite database.
+        set_account(self.account)
+        saved = get_schedule_time('explore')
+        if saved is None:
+            saved = latest_exploration_time()
+            if saved is None:
+                saved = time.time()
+            set_schedule_time('explore', saved)
+        self._last_explore_time = saved
+        self._last_archive_time = get_schedule_time('archive') or 0.0
 
     def _should_explore(self) -> bool:
-        now = time.time()
-        cooldown = random.randint(EXPLORE_COOLDOWN_MIN, EXPLORE_COOLDOWN_MAX) * 3600
-        if now - self._last_explore_time < cooldown:
-            return False
-        return random.random() < EXPLORE_PROBABILITY
+        # Re-read so manual exploration in another process also resets the timer.
+        saved = get_schedule_time('explore')
+        if saved is not None:
+            self._last_explore_time = saved
+        return time.time() - self._last_explore_time >= EXPLORE_INTERVAL_DAYS * 86400
 
     def _do_explore(self):
-        """探索 = AI 自己先说话的对话。创建会话 + 系统指令 → _process 处理"""
-        logger.info('开始探索...')
+        """Start an AI-initiated conversation with exploration instructions."""
+        set_account(self.account)
+        logger.info(tr('Starting exploration...'))
         self._last_explore_time = time.time()
         try:
+            set_schedule_time('explore', self._last_explore_time)
             self._do_explore_inner()
         except Exception:
-            logger.exception('探索失败')
+            logger.exception(tr('Exploration failed'))
         finally:
-            # 无论成败都要复位，否则主循环认为还在探索，探索永久停摆
+            # Reset regardless of success or failure, otherwise the main loop thinks exploration is still ongoing and exploration halts permanently
             self._exploring = False
 
     def _do_explore_inner(self):
-        # 最近 100 次探索的记录（有归档摘要用摘要，没有的取分享原文）
-        # 列足历史才能避免 A-B-A-B 型重复
+        # Records of the last 100 explorations (use archive summary if available; otherwise take the original shared text)
+        # List enough history to avoid A-B-A-B type repetition
         recent = list_conversations(source='explorer')[:100]
         recent_hint = ''
         for c in recent:
@@ -456,87 +485,90 @@ class Agent:
                         recent_hint += f'- {m["content"][:200].replace(chr(10), " ")}\n'
                         break
 
-        # 注意：不能用 f'..' if .. else '' 后面直接跟字符串拼接，
-        # Python 会把后面的字符串并进 else 分支，导致指令被吞
+        # Note: cannot use f'..' if .. else '' directly followed by string concatenation,
+        # Python will merge the following string into the else branch, causing instructions to be swallowed
         instruction = (
-            '去互联网上逛逛。用你的搜索工具（search_arxiv、search_hackernews、search_github、search_web）'
-            '找一个值得跟 xhy 分享的新鲜事——要有趣、有新意。找到一个就收，'
-            '分享完就结束，不要一次说好几个点。\n\n'
-            '系统提示里的[历史对话索引]是你和用户聊天的记录，可以参考他的近况和兴趣；'
-            '下面列出的是你之前探索分享过的内容，绝对不要重复。\n\n'
+            tr("""Browse the web with search_arxiv, search_hackernews, search_github, and search_web. Find one fresh, interesting discovery to share with the visitor. Stop after sharing that one discovery.
+
+Use the conversation index for their interests and recent context. The discoveries below were shared previously; do not repeat them.
+
+""")
         )
         if recent_hint:
-            instruction += f'你之前探索分享过这些（不要重复）：\n{recent_hint}\n'
-        instruction += '翻了一圈没什么值得说的，就回复"算了，今天没什么特别的"。'
+            instruction += tr('Previously shared discoveries (do not repeat):\n{0}\n').format(recent_hint)
+        instruction += tr('If nothing is worth sharing, reply exactly "Nothing to share today".')
 
         today = datetime.now().strftime('%m-%d')
-        conv = create_conversation(title=f'🤖 AI 探索 {today}', source='explore_raw')
-        # extra 用 user 角色：无对话上下文时 DeepSeek 会忽略第二条 system 消息，
-        # 用 user 传指令模型才必然响应
+        conv = create_conversation(title=tr('🤖 AI discovery {0}').format(today), source='explore_raw')
+        # For extra, use user role: with no conversation context DeepSeek will ignore the second system message,
+        # Only by passing instructions via user will the model definitely respond
         self._process(conv['id'], EXPLORE_TOOLS,
                       extra_messages=[{'role': 'user', 'content': instruction}])
 
-        # 探索完成后立刻归档，下次就能看到有信息量的摘要
+        # Archive immediately after exploration completes, so next time an informative summary can be seen
         last = get_last_message(conv['id'])
-        if last and last['role'] == 'assistant' and '算了' not in last.get('content', '')[:10]:
+        if last and last['role'] == 'assistant' and not last.get('content', '').strip().startswith(tr('Nothing to share today')):
             self._archive_conversation(conv['id'])
 
         last = get_last_message(conv['id'])
-        if last and last['role'] == 'assistant' and '算了' in last.get('content', '')[:10]:
+        if last and last['role'] == 'assistant' and last.get('content', '').strip().startswith(tr('Nothing to share today')):
             update_conversation(conv['id'], hidden=True)
-            logger.info('探索：没什么值得分享的')
+            logger.info(tr('Exploration: nothing worth sharing'))
 
         self._increment_today_count()
 
-    # ===== 自动归档 =====
+    # ===== Automatic archiving =====
 
     def _should_auto_archive(self) -> bool:
-        """每隔 4 小时跑一次自动归档"""
+        """Check for conversations to archive every four hours."""
         return time.time() - self._last_archive_time > 4 * 3600
 
     def _archive_conversation(self, conv_id: str):
-        """手动和自动归档共用：塞系统指令 → _process 处理"""
+        """Run the shared manual and automatic archive workflow."""
         msgs = list_messages(conv_id)
         if not msgs:
             return
 
-        # 把消息编号写进 instruction，AI 不用数数
+        # Write the message numbers into the instruction so the AI doesn't have to count
         numbered = '\n'.join(
             f'[{i}] [{m["role"]}]: {m["content"]}'
             for i, m in enumerate(msgs)
         )
 
         instruction = (
-            f'请归档这段对话。处理顺序：\n'
-            f'1. 用 load_memory 查看已有记忆，避免重复\n'
-            f'2. 提取新的事实/偏好/观察用 create_memory 写入，需要更新的用 update_memory\n'
-            f'3. 最后调用 finalize_archive 一次性提交分段方案\n\n'
-            f'分段要求：按照话题分段不要太碎，每条消息必须属于某一段，编号从 0 到 {len(msgs)-1}，不漏不重。\n\n'
-            f'--- 完整对话（带编号）---\n{numbered}'
+            tr("""Archive this conversation in order:
+1. Inspect relevant existing memories with load_memory to avoid duplicates.
+2. Use create_memory for new facts, preferences, and observations; use update_memory for revisions.
+3. Call finalize_archive once to submit the segments.
+
+Group by broad topics. Assign every message exactly once, with indices from 0 to {0}, with no gaps or overlaps.
+
+--- Full conversation with message indices ---
+{1}""").format(len(msgs) - 1, numbered)
         )
-        # 归档指令用 system 角色 + 不带历史消息：完整对话已嵌在 instruction 文本里，
-        # 历史里没有 assistant 消息，DS 的 reasoning 回传校验无从触发
+        # The archiving instruction uses the system role + no history messages: the full conversation is already embedded in the instruction text,
+        # There is no assistant message in the history, so DS's reasoning return verification cannot be triggered
         self._process(conv_id, ARCHIVE_TOOLS,
                       extra_messages=[{'role': 'system', 'content': instruction}],
                       use_history=False)
-        # 兜底：就算 finalize_archive 失败，也标记已归档避免重复扫描
+        # Fallback: even if finalize_archive fails, mark as archived to avoid repeated scanning
         update_conversation(conv_id, archived=True, last_archived_at=now_ms())
-        logger.info(f'归档完成 [{conv_id}]')
+        logger.info(tr('Archived conversation [{0}]').format(conv_id))
 
     def _do_finalize_archive(self, segments: list[dict]) -> str:
-        """执行 finalize_archive：验证编号 → 创建分段会话 + 拷贝消息 → 标记原会话"""
+        """Validate coverage, copy segments, and mark the source as archived."""
         conv_id = self._current_conv_id
         msgs = list_messages(conv_id)
         msg_count = len(msgs)
 
-        # 验证：覆盖所有编号，不漏不重不越界
+        # Verification: cover all numbers, no omissions, no duplicates, no out-of-bounds
         covered = set()
         for seg in segments:
             for i in range(seg['start'], seg['end'] + 1):
                 if i in covered:
-                    return f'错误：消息 [{i}] 被多个分段覆盖'
+                    return tr('Error: message [{0}] belongs to multiple segments').format(i)
                 if i < 0 or i >= msg_count:
-                    return f'错误：消息 [{i}] 越界（共 {msg_count} 条，编号 0-{msg_count-1}）'
+                    return tr('Error: message [{0}] is out of bounds (total: {1}; indices: 0-{2})').format(i, msg_count, msg_count - 1)
                 covered.add(i)
         expected = set(range(msg_count))
         if covered != expected:
@@ -544,13 +576,13 @@ class Agent:
             extra = sorted(covered - expected)
             parts = []
             if missing:
-                parts.append(f'缺少：{missing}')
+                parts.append(tr('Missing: {0}').format(missing))
             if extra:
-                parts.append(f'越界：{extra}')
-            return f'错误：消息覆盖不完整。' + '，'.join(parts)
+                parts.append(tr('Out of bounds: {0}').format(extra))
+            return tr('Error: incomplete message coverage. ').format() + '，'.join(parts)
 
-        # 执行：创建分段，拷贝消息
-        # 探索源会话（explore_raw）的归档产物继续叫 explorer，用户归档叫 archive
+        # Execute: create segments and copy messages
+        # The archive products from the exploration source session (explore_raw) continue to be called explorer; user archives are called archive
         src = get_conversation(conv_id)
         new_source = 'explorer' if src and src.get('source') == 'explore_raw' else 'archive'
         for seg in segments:
@@ -562,26 +594,27 @@ class Agent:
                               summary=seg.get('summary', ''),
                               last_archived_at=now_ms())
 
-        # 标记原会话已归档
+        # Mark the original session as archived
         update_conversation(conv_id, archived=True, last_archived_at=now_ms())
         return '__ARCHIVE_DONE__'
 
     def _auto_archive_dirty(self):
-        """定时扫描 dirty 会话 → 自动归档"""
-        logger.info('自动归档：扫描 dirty 会话...')
+        """Archive eligible conversations on the scheduled scan."""
+        logger.info(tr('Auto-archive: scanning eligible conversations...'))
         self._last_archive_time = time.time()
+        set_schedule_time('archive', self._last_archive_time)
 
         dirty = get_dirty_conversations()
         if not dirty:
-            logger.info('自动归档：没有需要归档的会话')
+            logger.info(tr('Auto-archive: no eligible conversations'))
             return
 
-        logger.info(f'自动归档：找到 {len(dirty)} 个 dirty 会话')
+        logger.info(tr('Auto-archive: found {0} eligible conversations').format(len(dirty)))
         for conv in dirty:
             try:
                 self._archive_conversation(conv['id'])
             except Exception:
-                logger.exception(f'自动归档失败 [{conv["id"]}]')
+                logger.exception(tr('Auto-archive failed [{0}]').format(conv['id']))
 
     def _reset_daily_counter(self):
         today = datetime.now().strftime('%Y%m%d')
@@ -594,7 +627,7 @@ class Agent:
         self._today_message_count += 1
 
 
-# ===== 调试：保存最后一次 AI 收到的完整输入 =====
+# ===== Debug: Save the last complete input received by AI =====
 
 import os as _os
 import json as _json
@@ -603,20 +636,22 @@ _DEBUG_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data'
 
 
 def _save_debug_prompt(messages: list[dict]):
-    """每次调用 AI 前保存完整 messages 到文件"""
+    """Save the most recent model conversation for debugging."""
     try:
-        _os.makedirs(_os.path.dirname(_DEBUG_FILE), exist_ok=True)
-        with open(_DEBUG_FILE, 'w', encoding='utf-8') as f:
+        path = debug_path()
+        _os.makedirs(_os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
             _json.dump(messages, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
 def get_last_prompt() -> dict | None:
-    """读取最后一次的 prompt"""
+    """Read the most recent debug prompt."""
     try:
-        if _os.path.exists(_DEBUG_FILE):
-            with open(_DEBUG_FILE, 'r', encoding='utf-8') as f:
+        path = debug_path()
+        if _os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
                 return _json.load(f)
     except Exception:
         pass
