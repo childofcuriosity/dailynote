@@ -24,6 +24,7 @@ from ai_client import (
 )
 from explorer import (
     search_arxiv, search_hackernews, search_github_trending, fetch_url,
+    fetch_rendered,
 )
 from config import (
     CHECK_INTERVAL_MIN, CHECK_INTERVAL_MAX,
@@ -133,10 +134,11 @@ class Agent:
                 logger.exception(f'回复会话 {conv_id} 失败')
 
     def _process(self, conv_id: str, tools: list[dict],
-                 extra_messages: list[dict] | None = None):
+                 extra_messages: list[dict] | None = None,
+                 use_history: bool = True):
         """通用处理入口：聊天/探索/归档共用"""
         self._current_conv_id = conv_id
-        history = get_recent_conversation_context(conv_id)
+        history = get_recent_conversation_context(conv_id) if use_history else []
 
         # 探索/归档通过 extra_messages 注入指令，history 可以为空
         if not extra_messages:
@@ -147,6 +149,7 @@ class Agent:
                 return
 
         # 构建对话历史（不包含 tool 消息——它们没有 tool_call_id，API 会报错）
+        # 历史不带 reasoning：新 user 消息开启新轮次后，DS 允许清掉历史 reasoning
         conversation = [
             {'role': m['role'], 'content': m['content']}
             for m in history if m['role'] in ('user', 'assistant', 'system')
@@ -166,7 +169,8 @@ class Agent:
         ) if mems else '暂无记忆'
 
         # 构建对话历史索引（title + summary + date + tags）
-        convs = list_conversations()
+        # 只列归档后的会话：未归档的和归档内容重复，探索会话不属于用户主动对话
+        convs = [c for c in list_conversations() if c.get('source') == 'archive']
         history_parts = []
         for c in convs:
             ts = c.get('created_at', 0)
@@ -312,7 +316,7 @@ class Agent:
             )
 
         elif name == 'search_hackernews':
-            results = search_hackernews(args['query'])
+            results = search_hackernews(args.get('query', ''))
             if not results:
                 return '未找到相关新闻。'
             return '\n\n'.join(
@@ -332,6 +336,9 @@ class Agent:
 
         elif name == 'fetch_url':
             return fetch_url(args['url'])
+
+        elif name == 'fetch_rendered':
+            return fetch_rendered(args['url'])
 
         elif name == 'create_memory':
             mid = insert_memory(
@@ -426,31 +433,48 @@ class Agent:
         """探索 = AI 自己先说话的对话。创建会话 + 系统指令 → _process 处理"""
         logger.info('开始探索...')
         self._last_explore_time = time.time()
+        try:
+            self._do_explore_inner()
+        except Exception:
+            logger.exception('探索失败')
+        finally:
+            # 无论成败都要复位，否则主循环认为还在探索，探索永久停摆
+            self._exploring = False
 
-        # 最近几次探索的摘要（已归档的标题+摘要，信息量最大）
-        recent = list_conversations(source='explorer')[:5]
+    def _do_explore_inner(self):
+        # 最近 100 次探索的记录（有归档摘要用摘要，没有的取分享原文）
+        # 列足历史才能避免 A-B-A-B 型重复
+        recent = list_conversations(source='explorer')[:100]
         recent_hint = ''
         for c in recent:
-            summary = c.get('summary', '')
+            summary = c.get('summary')
             if summary:
-                recent_hint += f'- {c["title"]}: {summary}\n'
+                recent_hint += f'- {summary}\n'
             else:
-                recent_hint += f'- {c["title"]}\n'
+                for m in reversed(list_messages(c['id'])):
+                    if m['role'] == 'assistant' and m.get('content'):
+                        recent_hint += f'- {m["content"][:200].replace(chr(10), " ")}\n'
+                        break
 
+        # 注意：不能用 f'..' if .. else '' 后面直接跟字符串拼接，
+        # Python 会把后面的字符串并进 else 分支，导致指令被吞
         instruction = (
-            f'最近探索过（别重复）：\n{recent_hint}\n' if recent_hint else ''
             '去互联网上逛逛。用你的搜索工具（search_arxiv、search_hackernews、search_github、search_web）'
-            '找 2-3 个方向看看，有没有什么值得跟 xhy 分享的——要有趣、有新意。\n\n'
-            '不要因为 xhy 的偏好或记忆里的反馈就自我审查探索方向。偶然的惊喜、意外的发现、'
-            '甚至不同领域的交叉碰撞，比安全地待在他的已知兴趣圈里更有价值。\n\n'
-            '搜到 1-2 个好的就收，用自然的方式分享。翻了一圈没什么值得说的，'
-            '就回复"算了，今天没什么特别的"。'
+            '找一个值得跟 xhy 分享的新鲜事——要有趣、有新意。找到一个就收，'
+            '分享完就结束，不要一次说好几个点。\n\n'
+            '系统提示里的[历史对话索引]是你和用户聊天的记录，可以参考他的近况和兴趣；'
+            '下面列出的是你之前探索分享过的内容，绝对不要重复。\n\n'
         )
+        if recent_hint:
+            instruction += f'你之前探索分享过这些（不要重复）：\n{recent_hint}\n'
+        instruction += '翻了一圈没什么值得说的，就回复"算了，今天没什么特别的"。'
 
         today = datetime.now().strftime('%m-%d')
-        conv = create_conversation(title=f'🤖 AI 探索 {today}', source='explorer')
+        conv = create_conversation(title=f'🤖 AI 探索 {today}', source='explore_raw')
+        # extra 用 user 角色：无对话上下文时 DeepSeek 会忽略第二条 system 消息，
+        # 用 user 传指令模型才必然响应
         self._process(conv['id'], EXPLORE_TOOLS,
-                      extra_messages=[{'role': 'system', 'content': instruction}])
+                      extra_messages=[{'role': 'user', 'content': instruction}])
 
         # 探索完成后立刻归档，下次就能看到有信息量的摘要
         last = get_last_message(conv['id'])
@@ -463,7 +487,6 @@ class Agent:
             logger.info('探索：没什么值得分享的')
 
         self._increment_today_count()
-        self._exploring = False
 
     # ===== 自动归档 =====
 
@@ -474,7 +497,7 @@ class Agent:
     def _archive_conversation(self, conv_id: str):
         """手动和自动归档共用：塞系统指令 → _process 处理"""
         msgs = list_messages(conv_id)
-        if len(msgs) < 2:
+        if not msgs:
             return
 
         # 把消息编号写进 instruction，AI 不用数数
@@ -491,8 +514,11 @@ class Agent:
             f'分段要求：按照话题分段不要太碎，每条消息必须属于某一段，编号从 0 到 {len(msgs)-1}，不漏不重。\n\n'
             f'--- 完整对话（带编号）---\n{numbered}'
         )
+        # 归档指令用 system 角色 + 不带历史消息：完整对话已嵌在 instruction 文本里，
+        # 历史里没有 assistant 消息，DS 的 reasoning 回传校验无从触发
         self._process(conv_id, ARCHIVE_TOOLS,
-                      extra_messages=[{'role': 'system', 'content': instruction}])
+                      extra_messages=[{'role': 'system', 'content': instruction}],
+                      use_history=False)
         # 兜底：就算 finalize_archive 失败，也标记已归档避免重复扫描
         update_conversation(conv_id, archived=True, last_archived_at=now_ms())
         logger.info(f'归档完成 [{conv_id}]')
@@ -524,8 +550,11 @@ class Agent:
             return f'错误：消息覆盖不完整。' + '，'.join(parts)
 
         # 执行：创建分段，拷贝消息
+        # 探索源会话（explore_raw）的归档产物继续叫 explorer，用户归档叫 archive
+        src = get_conversation(conv_id)
+        new_source = 'explorer' if src and src.get('source') == 'explore_raw' else 'archive'
         for seg in segments:
-            new_conv = create_conversation(title=seg['title'], source='archive')
+            new_conv = create_conversation(title=seg['title'], source=new_source)
             new_id = new_conv['id']
             for i in range(seg['start'], seg['end'] + 1):
                 copy_message(msgs[i]['id'], new_id)

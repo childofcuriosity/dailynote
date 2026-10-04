@@ -102,13 +102,13 @@ TOOLS = [
         'type': 'function',
         'function': {
             'name': 'search_hackernews',
-            'description': '搜索 HackerNews 技术新闻和讨论。适合查技术圈热门话题。',
+            'description': '搜索 HackerNews 技术新闻和讨论。适合查技术圈热门话题。不传搜索词则返回热榜。',
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'query': {'type': 'string', 'description': '搜索词'},
+                    'query': {'type': 'string', 'description': '搜索词。不传则返回 HackerNews 热榜'},
                 },
-                'required': ['query'],
+                'required': [],
             },
         },
     },
@@ -135,6 +135,23 @@ TOOLS = [
                 'type': 'object',
                 'properties': {
                     'url': {'type': 'string', 'description': '要抓取的网页 URL'},
+                },
+                'required': ['url'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'fetch_rendered',
+            'description': '用无头浏览器渲染动态网页后抓取正文。'
+                          '当 fetch_url 的结果不理想——只有导航/页面骨架、正文缺失、'
+                          '或出现"加载中"之类的占位文字时，用这个工具再试一次。'
+                          '较慢（约 5-10 秒），只在 fetch_url 不满意时使用，不要滥用。',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': '要渲染抓取的网页 URL'},
                 },
                 'required': ['url'],
             },

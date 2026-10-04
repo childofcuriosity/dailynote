@@ -123,8 +123,12 @@ def new_id() -> str:
 
 # ========== Conversations ==========
 
-def list_conversations() -> list[dict]:
+def list_conversations(source: str | None = None) -> list[dict]:
     db = get_db()
+    if source:
+        return [dict(r) for r in db.execute(
+            'SELECT * FROM conversations WHERE source = ? ORDER BY last_active_at DESC',
+            (source,)).fetchall()]
     # 返回全部会话，由客户端（Flutter）自己过滤 hidden
     return [dict(r) for r in db.execute(
         'SELECT * FROM conversations ORDER BY last_active_at DESC').fetchall()]

@@ -12,7 +12,6 @@ if "%VPS_HOST%"=="" (
 
 if "%~1"=="" (
     scp -o StrictHostKeyChecking=accept-new *.py %VPS_HOST%
-    scp -o StrictHostKeyChecking=accept-new agent_soul.md %VPS_HOST%
 ) else (
     scp -o StrictHostKeyChecking=accept-new %* %VPS_HOST%
 )

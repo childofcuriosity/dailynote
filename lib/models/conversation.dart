@@ -37,7 +37,7 @@ class Conversation {
   bool get isDirty =>
       lastArchivedAt == null || lastActiveAt.isAfter(lastArchivedAt!);
 
-  bool get isAiGenerated => source == 'explorer' || source == 'agent';
+  bool get isAiGenerated => source == 'explorer' || source == 'explore_raw' || source == 'agent';
 
   factory Conversation.fromSupabase(Map<String, dynamic> map) {
     return Conversation(

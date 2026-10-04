@@ -47,6 +47,23 @@ app.*.map.json
 # 隐私配置（API Key 等）
 lib/services/secrets.dart
 agent/.env
+.env
+.env.*
+!.env.example
+agent/agent_soul.md
+
+# 运行数据、数据库及个人转写结果
+agent/data/
+agent/logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*_字幕*.srt
+*_转写*.txt
+*.stackdump
 
 # Python
 __pycache__/
